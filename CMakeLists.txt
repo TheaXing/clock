@@ -26,6 +26,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
+option(CLOCK_RGB_TEST "Run the preserved RGB/workqueue hardware smoke test" OFF)
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -52,23 +53,80 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/FreeRTOS/stream_buffer.c
     Middlewares/FreeRTOS/portable/heap_4.c
     Middlewares/FreeRTOS/portable/GCC/ARM_CM4F/port.c
-    App/workqueue.c
+    app/workqueue.c
+    app/app.c
+    app/wifi.c
+    app/weather.c
+    app/ui.c
+    BSP/AHT20/aht20.c
+    BSP/RTC/clock_rtc.c
+    BSP/Console/clock_console.c
+    BSP/ESP_AT/esp_at.c
+    BSP/ESP_AT/esp_at_parse.c
     BSP/ST7789/st7789.c
 )
+
+# Only the files actually used by the legacy Keil clock, with their original
+# GB2312 execution bytes. Newly authored HAL/application files stay UTF-8.
+set(CLOCK_LEGACY_SOURCES
+    app/page/welcome_page.c
+    app/page/error_page.c
+    app/page/wifi_page.c
+    app/page/main_page.c
+    app/page/image_error.c
+    app/page/icon_duoyun.c
+    app/font/font16_maple.c
+    app/font/font24_maple.c
+    app/font/font24_maple_bold.c
+    app/font/font32_maple.c
+    app/font/font42_maple.c
+    app/font/font54_maple_medium.c
+    app/font/font62_maple_bold.c
+    app/font/font76_maple_bold.c
+    app/image/image_star.c
+    app/image/image_wifi.c
+    app/image/icon_wifi.c
+    app/image/icon_wenduji.c
+    app/image/icon_qing.c
+    app/image/icon_leizhengyu.c
+    app/image/icon_yintian.c
+    app/image/icon_yueliang.c
+    app/image/icon_zhongxue.c
+    app/image/icon_zhongyu.c
+    app/image/icon_na.c
+)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CLOCK_LEGACY_SOURCES})
+set_source_files_properties(${CLOCK_LEGACY_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-finput-charset=GBK;-fexec-charset=GBK")
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/FreeRTOS/include
     Middlewares/FreeRTOS/portable
     Middlewares/FreeRTOS/portable/GCC/ARM_CM4F
-    App
+    app
+    app/page
+    BSP/AHT20
+    BSP/RTC
+    BSP/Console
+    BSP/ESP_AT
     BSP/ST7789
 )
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined symbols
+    CLOCK_RGB_TEST=$<BOOL:${CLOCK_RGB_TEST}>
 )
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/clock_config_local.h")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CLOCK_LOCAL_CONFIG=1)
+endif()
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O ihex $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+            ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.hex
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+            ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_PROJECT_NAME}.bin
+    VERBATIM)
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

@@ -25,7 +25,7 @@ extern uint32_t SystemCoreClock;
 #define configQUEUE_REGISTRY_SIZE                                   10
 #define configUSE_QUEUE_SETS                                        1
 #define configUSE_TIME_SLICING                                      1
-#define configUSE_NEWLIB_REENTRANT                                  0
+#define configUSE_NEWLIB_REENTRANT                                  1
 #define configENABLE_BACKWARD_COMPATIBILITY                         0
 #define configNUM_THREAD_LOCAL_STORAGE_POINTERS                     5
 #define configUSE_MINI_LIST_ITEM                                    1
@@ -41,7 +41,7 @@ extern uint32_t SystemCoreClock;
 /* Hook function related definitions. */
 #define configUSE_IDLE_HOOK                                 0
 #define configUSE_TICK_HOOK                                 0
-#define configCHECK_FOR_STACK_OVERFLOW                      1
+#define configCHECK_FOR_STACK_OVERFLOW                      2
 #define configUSE_MALLOC_FAILED_HOOK                        1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK                  0
 #define configUSE_SB_COMPLETED_CALLBACK                     0

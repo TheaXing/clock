@@ -50,48 +50,80 @@ static void st7789_spi_send(const uint8_t *data, uint16_t length)
     }
 }
 
-static void st7789_write_register(uint8_t reg, uint8_t data[], uint16_t length)
+static void st7789_write_register(uint8_t reg,
+                                  uint8_t data[],
+                                  uint16_t length)
 {
-    SPI_DataSizeConfig(SPI2, SPI_DataSize_8b);
-    
+    /* CS低：选中屏幕 */
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-    
+
+    /* DC低：发送命令 */
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_RESET);
-    SPI_SendData(SPI2, reg);
-    while (SPI_GetFlagStatus(SPI2, SPI_FLAG_TXE) == RESET);
-    while (SPI_GetFlagStatus(SPI2, SPI_FLAG_BSY) != RESET);
-    
+    st7789_spi_send(&reg, 1);//这段代码是为了发送寄存器地址，告诉屏幕接下来要写入哪个寄存器。
+
+    /* DC高：发送命令参数 */
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
-    for (uint16_t i = 0; i < length; i++)
+
+    if (length > 0)
     {
-        SPI_SendData(SPI2, data[i]);
-        while (!SPI_GetFlagStatus(SPI2, SPI_FLAG_TXE));
+        configASSERT(data != NULL);
+        st7789_spi_send(data, length);
     }
-    while (SPI_GetFlagStatus(SPI2, SPI_FLAG_BSY) != RESET);
-    
+
+    /* CS高：结束传输 */
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
 }
 
-static void st7789_write_gram(uint8_t data[], uint32_t length, bool singlecolor)
+static void st7789_write_gram(uint8_t data[],
+                             uint32_t length,
+                             bool singlecolor)
 {
-    SPI_DataSizeConfig(SPI2, SPI_DataSize_16b);   
+    static uint8_t tx_buffer[256];
+
+    if (length == 0)
+        return;
+
+    /* RGB565每个像素占2字节，长度必须是偶数 */
+    if (data == NULL || (length & 1U) != 0U)
+    {
+        Error_Handler();
+        return;
+    }
+
+    /* 选中屏幕，DC拉高表示发送像素数据 */
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(DC_PORT, DC_PIN, GPIO_PIN_SET);
-    length >>= 1;
-    do
+
+    while (length > 0)
     {
-       uint32_t chunk_size = length < 65535 ? length : 65535;65535 涓?鏁版嵁鍗曞厓
+        /* 每次最多处理256字节 */
+        uint16_t count = (uint16_t)(
+            length > sizeof(tx_buffer) ? sizeof(tx_buffer) : length
+        );
 
-        if (singlecolor) DMA1_Stream4->CR &= ~DMA_SxCR_MINC;
-        else             DMA1_Stream4->CR |= DMA_SxCR_MINC;
-        DMA1_Stream4->NDTR = chunk_size;
-        xSemaphoreTake(write_gram_semaphore, portMAX_DELAY);
+        for (uint16_t i = 0; i < count; i += 2)//这段代码是为了将像素数据从源缓冲区复制到传输缓冲区，并根据是否为单色模式选择不同的像素数据源。
+        {
+            /*
+             * 单色：始终读取同一个颜色的两个字节。
+             * 图片/字体：依次读取每个像素。
+             */
+            const uint8_t *pixel = singlecolor ? data : data + i;
+
+            /* 旧缓冲低字节在前，屏幕需要高字节在前 */
+            tx_buffer[i]     = pixel[1];
+            tx_buffer[i + 1] = pixel[0];
+        }
+
+        st7789_spi_send(tx_buffer, count);
+
+        /* 非单色模式，源指针移动到下一块 */
         if (!singlecolor)
-            data += chunk_size * 2;
-    } while (length > 0);
-    
-    while (SPI_GetFlagStatus(SPI2, SPI_FLAG_BSY) != RESET);
+            data += count;
 
+        length -= count;
+    }
+
+    /* 所有像素发送完成 */
     HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
 }
 
@@ -130,7 +162,7 @@ static void st7789_init_display(void)
     st7789_write_register(0xD0, (uint8_t[]){0xA4,0xA1}, 2);
     st7789_write_register(0xD6, (uint8_t[]){0xA1}, 1);
     st7789_write_register(0xE0, (uint8_t[]){0xF0,0x00,0x06,0x04,0x05,0x05,0x31,0x44,0x48,0x36,0x12,0x12,0x2B,0x34}, 14);
-    st7789_write_register(0xE0, (uint8_t[]){0xF0,0x0B,0x0F,0x0F,0x0D,0x26,0x31,0x43,0x47,0x38,0x14,0x14,0x2C,0x32}, 14);
+    st7789_write_register(0xE1, (uint8_t[]){0xF0,0x0B,0x0F,0x0F,0x0D,0x26,0x31,0x43,0x47,0x38,0x14,0x14,0x2C,0x32}, 14);
     st7789_write_register(0x21, NULL, 0);
     st7789_write_register(0x29, NULL, 0);
     
@@ -148,6 +180,13 @@ static bool in_screen_range(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
         return false;
 
     return true;
+}
+
+static bool in_screen_rect(uint16_t x, uint16_t y, uint16_t width, uint16_t height)
+{
+    return x < ST7789_WIDTH && y < ST7789_HEIGHT &&
+           width != 0 && height != 0 &&
+           width <= ST7789_WIDTH - x && height <= ST7789_HEIGHT - y;
 }
 
 static void st7789_set_range_and_prepare_gram(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
@@ -170,9 +209,13 @@ void st7789_fill_color(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint1
 
 static void st7789_draw_font(uint16_t x, uint16_t y, uint16_t width, uint16_t height, const uint8_t *model, uint16_t color, uint16_t bg_color)
 {
-    uint16_t bytes_per_row = (width + 7) / 8;
-    
     static uint8_t buff[72 * 72 * 2];
+    uint32_t pixels = (uint32_t)width * height;
+    if (model == NULL || !in_screen_rect(x, y, width, height) ||
+        pixels > sizeof(buff) / 2)
+        return;
+
+    uint16_t bytes_per_row = (width + 7) / 8;
     uint8_t *pbuf = buff;
 	for (uint16_t row = 0; row < height; row++)
 	{
@@ -187,24 +230,27 @@ static void st7789_draw_font(uint16_t x, uint16_t y, uint16_t width, uint16_t he
 	}
     
     st7789_set_range_and_prepare_gram(x, y, x + width - 1, y + height - 1);
-    st7789_write_gram(buff, pbuf - buff, false);
+    st7789_write_gram(buff, pixels * 2, false);
 }
 
 static const uint8_t *ascii_get_model(const char ch, const font_t *font)
 {
+    if (font->ascii_model == NULL)
+        return NULL;
+
     uint16_t bytes_per_row = (font->size / 2 + 7) / 8;
     uint16_t bytes_per_char = font->size * bytes_per_row;
     
     if (font->ascii_map)
     {
         const char *map = font->ascii_map;
-        do
+        for (; *map != '\0'; ++map)
         {
             if (*map == ch)
             {
                 return font->ascii_model + (map - font->ascii_map) * bytes_per_char;
             }
-        } while (*(++map) != '\0');
+        }
     }
     else
     {
@@ -220,24 +266,24 @@ static void st7789_write_ascii(uint16_t x, uint16_t y, char ch, uint16_t color, 
         return;
     
     uint16_t fheight = font->size, fwidth = font->size / 2;
-    if (!in_screen_range(x, y, x + fwidth - 1, y + fheight - 1))
+    if (!in_screen_rect(x, y, fwidth, fheight))
         return;
     
     if (ch < 0x20 || ch > 0x7E)
         return;
     
-	const uint8_t *model = ascii_get_model(ch, font);
+	    const uint8_t *model = ascii_get_model(ch, font);
     if (model)
         st7789_draw_font(x, y, fwidth, fheight, model, color, bg_color);
 }
 
 static void st7789_write_chinese(uint16_t x, uint16_t y, const char *ch, uint16_t color, uint16_t bg_color, const font_t *font)
 {
-    if (ch == NULL || font == NULL)
+    if (ch == NULL || font == NULL || font->chinese == NULL)
         return;
 
     uint16_t fheight = font->size, fwidth = font->size;
-    if (!in_screen_range(x, y, x + fwidth - 1, y + fheight - 1))
+    if (!in_screen_rect(x, y, fwidth, fheight))
         return;
     
     const font_chinese_t *c = font->chinese;
@@ -268,40 +314,48 @@ static bool is_gb2312(char ch)
 
 void st7789_write_string(uint16_t x, uint16_t y, const char *str, uint16_t color, uint16_t bg_color, const font_t *font)
 {
+    if (str == NULL || font == NULL || font->size < 2)
+        return;
+
+    uint32_t cursor_x = x;
     while (*str)
     {
-        // int len = utf8_char_length(*str);
         int len = is_gb2312(*str) ? 2 : 1;
-        if (len <= 0)
+        uint16_t width = len == 1 ? font->size / 2 : font->size;
+        if (cursor_x >= ST7789_WIDTH ||
+            !in_screen_rect((uint16_t)cursor_x, y, width, font->size))
+            break;
+
+        if (len == 1)
         {
+            st7789_write_ascii((uint16_t)cursor_x, y, *str, color, bg_color, font);
             str++;
-            continue;
-        }
-        else if (len == 1)
-        {
-            st7789_write_ascii(x, y, *str, color, bg_color, font);
-            str++;
-            x += font->size / 2;
         }
         else
         {
-            char ch[5];
-            strncpy(ch, str, len);
-            st7789_write_chinese(x, y, ch, color, bg_color, font);
+            if (str[1] == '\0')
+                break;
+            if ((unsigned char)str[1] < 0xA1 || (unsigned char)str[1] > 0xFE)
+            {
+                ++str;
+                continue;
+            }
+            char ch[3] = {str[0], str[1], '\0'};
+            st7789_write_chinese((uint16_t)cursor_x, y, ch, color, bg_color, font);
             str += len;
-            x += font->size;
         }
+        cursor_x += width;
     }
 }
 
 void st7789_draw_image(uint16_t x, uint16_t y, const image_t *image)
 {
-    if (x >= ST7789_WIDTH || y >= ST7789_HEIGHT || 
-        x + image->width - 1 >= ST7789_WIDTH || y + image->height + 1 >= ST7789_HEIGHT)
+    if (image == NULL || image->data == NULL ||
+        !in_screen_rect(x, y, image->width, image->height))
         return;
     
     st7789_set_range_and_prepare_gram(x, y, x + image->width - 1, y + image->height - 1);
-    st7789_write_gram((uint8_t *)image->data, image->width * image->height * 2, false);
+    st7789_write_gram((uint8_t *)image->data, (uint32_t)image->width * image->height * 2, false);
 }
 
 

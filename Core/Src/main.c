@@ -28,6 +28,15 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "workqueue.h"
+#include "clock_config.h"
+#include "clock_console.h"
+#include "clock_rtc.h"
+#include "i2c.h"
+#include "app.h"
+#include "ui.h"
+#include "wifi.h"
+#include "page.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -60,10 +69,11 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+#if CLOCK_RGB_TEST
 static void DisplayTask(void *argument)
 {
     (void)argument;
-    const uint16_t colors[] = {0xF800, 0x07E0, 0x001F};
+    const uint16_t colors[] = {0xF800, 0x07E0, 0x001F};//红、绿、蓝
 
     st7789_init();
 
@@ -79,7 +89,7 @@ static void DisplayTask(void *argument)
 
 static void PrintJob(void *argument)
 {
-    (void)argument;
+    (void)argument;//这段代码是为了避免编译器警告，表示参数未使用
     uint8_t msg[] = "Workqueue running\r\n";
     HAL_UART_Transmit(&huart1, msg, sizeof(msg) - 1, 100);
 }
@@ -96,6 +106,29 @@ static void TestTask(void *argument)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+
+#else
+static void ClockInitTask(void *argument)
+{
+    (void)argument;
+    rtc_init();
+    if (!clock_rtc_ready()) clock_log_line("[RTC] Unavailable; check 32.768 kHz LSE crystal");
+    ui_init();
+    welcome_page_display();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    wifi_page_display();
+    bool connected = wifi_init() && wifi_wait_connect();
+    if (!connected)
+    {
+        error_page_display("WiFi unavailable; retrying");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    main_page_display();
+    main_page_redraw_wifi_ssid(connected ? CLOCK_WIFI_SSID : "wifi lost");
+    app_init();
+    vTaskDelete(NULL);
+}
+#endif
 
 /* USER CODE END 0 */
 
@@ -132,22 +165,33 @@ int main(void)
   MX_SPI2_Init();
 
   /* USER CODE BEGIN 2 */
+  MX_USART2_UART_Init();
+  MX_I2C2_Init();
+  clock_console_init();
+  setvbuf(stdout, NULL, _IONBF, 0);
+  clock_log("[SYS] Clock_CubeMX %s; %s %s\r\n", APP_VERSION, __DATE__, __TIME__);
   workqueue_init();
-  
+#if CLOCK_RGB_TEST
   if (xTaskCreate(TestTask, "Test", 256, NULL, 1, NULL) != pdPASS)
   {
     Error_Handler();
   }
 
   if (xTaskCreate(DisplayTask, "LCD", 1024, NULL, 1, NULL) != pdPASS)
-{
+  {
     Error_Handler();
-}
+  }
+#else
+  if (xTaskCreate(ClockInitTask, "init", 2048, NULL, 4, NULL) != pdPASS)
+  {
+    Error_Handler();
+  }
+#endif
 
   vTaskStartScheduler();
 
   /* 调度器正常启动后不会返回。 */
-  Error_Handler();
+  Error_Handler();//调度器启动失败时，返回到这里
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -157,10 +201,10 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    uint8_t msg[] = "Clock_CubeMX OK\r\n";
+    uint8_t msg[] = "Clock_CubeMX OK\r\n";//
     HAL_UART_Transmit(&huart1, msg, sizeof(msg) - 1, 100);
     HAL_Delay(1000);
-  }
+  }//这段代码是为了在调度器启动失败时，仍然能够输出信息到串口，方便调试。正常情况下，调度器启动后不会返回到这里。
   /* USER CODE END 3 */
 }
 
@@ -279,7 +323,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+     ex: clock_log("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
