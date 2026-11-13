@@ -21,9 +21,7 @@
 
 RX interrupts while commands time out; disconnected ESP with local clock/sensor still running; RTC calendar retention across reset; malformed/truncated weather data; multilingual resource bytes and exact screen edges; queue pressure and task creation/memory failure.
 
-## Historical implementation record
-
-The entries below describe the original migration session. Memory figures and verification results are historical; the split migration snapshot requires fresh host/Debug/Release/RGB verification and new map/size measurements.
+## Progress and decisions
 
 - Baseline Debug rebuilt successfully before integration: RAM 96824 bytes, Flash 23960 bytes.
 - Working branch: `codex/migrate-weather-clock`; work remains in the requested directory to retain the user's uncommitted, board-verified main/ST7789 baseline. No commits or flashing requested.

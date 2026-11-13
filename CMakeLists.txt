@@ -27,6 +27,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 # Core project settings
 project(${CMAKE_PROJECT_NAME})
 option(CLOCK_RGB_TEST "Run the preserved RGB/workqueue hardware smoke test" OFF)
+option(CLOCK_BUZZER_ACTIVE "Drive an active buzzer with GPIO instead of PWM" OFF)
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -58,6 +59,14 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     app/wifi.c
     app/weather.c
     app/ui.c
+    app/alarm/alarm_engine.c
+    app/alarm/alarm_store.c
+    app/alarm/alarm_menu.c
+    app/alarm/alarm_page.c
+    app/alarm/alarm_service.c
+    BSP/Buzzer/buzzer.c
+    BSP/Keys/board_keys.c
+    BSP/BL24C512/bl24c512.c
     BSP/AHT20/aht20.c
     BSP/RTC/clock_rtc.c
     BSP/Console/clock_console.c
@@ -106,6 +115,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     Middlewares/FreeRTOS/portable/GCC/ARM_CM4F
     app
     app/page
+    app/alarm
+    BSP/Buzzer
+    BSP/Keys
+    BSP/BL24C512
     BSP/AHT20
     BSP/RTC
     BSP/Console
@@ -116,6 +129,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CLOCK_RGB_TEST=$<BOOL:${CLOCK_RGB_TEST}>
+    CLOCK_BUZZER_ACTIVE=$<BOOL:${CLOCK_BUZZER_ACTIVE}>
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/clock_config_local.h")
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CLOCK_LOCAL_CONFIG=1)

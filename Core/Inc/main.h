@@ -67,6 +67,14 @@ void Error_Handler(void);
 #define LCD_BL_GPIO_Port GPIOE
 
 /* USER CODE BEGIN Private defines */
+#define KEY1_Pin GPIO_PIN_0
+#define KEY1_GPIO_Port GPIOA
+#define KEY2_Pin GPIO_PIN_4
+#define KEY2_GPIO_Port GPIOC
+#define KEY3_Pin GPIO_PIN_5
+#define KEY3_GPIO_Port GPIOC
+#define BUZZER_Pin GPIO_PIN_7
+#define BUZZER_GPIO_Port GPIOC
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

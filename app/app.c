@@ -15,8 +15,70 @@
 #include "weather.h"
 #include "wifi.h"
 #include "workqueue.h"
+#include "alarm_service.h"
 
 static TaskHandle_t clock_task, sensor_task, network_task;
+typedef struct {
+    float temperature, humidity;
+    weather_info_t weather;
+    char ssid[64];
+    bool indoor_valid, weather_valid, ssid_valid;
+} main_values_t;
+static main_values_t latest;
+static bool main_redraw_requested;
+
+void app_request_main_redraw(void)
+{
+    taskENTER_CRITICAL();
+    main_redraw_requested=true;
+    taskEXIT_CRITICAL();
+}
+
+static void restore_main(const rtc_date_time_t *date)
+{
+    main_values_t values;
+    taskENTER_CRITICAL();values=latest;taskEXIT_CRITICAL();
+    main_page_display();
+    if(values.ssid_valid)main_page_redraw_wifi_ssid(values.ssid);
+    else main_page_redraw_wifi_ssid("connecting");
+    if(date->year>=2020 && date->year<=2099) {
+        rtc_date_time_t copy=*date;
+        main_page_redraw_time(&copy);main_page_redraw_date(&copy);
+    }
+    if(values.indoor_valid) {
+        main_page_redraw_inner_temperature(values.temperature);
+        main_page_redraw_inner_humidity(values.humidity);
+    }
+    if(values.weather_valid) {
+        main_page_redraw_outdoor_city(values.weather.city);
+        main_page_redraw_outdoor_temperature(values.weather.temperature);
+        main_page_redraw_outdoor_weather_icon(values.weather.weather_code);
+    }
+}
+
+static void publish_indoor(float temperature,float humidity)
+{
+    taskENTER_CRITICAL();
+    latest.temperature=temperature;latest.humidity=humidity;latest.indoor_valid=true;
+    taskEXIT_CRITICAL();
+    if(alarm_service_display_begin()) {
+        main_page_redraw_inner_temperature(temperature);
+        main_page_redraw_inner_humidity(humidity);
+        alarm_service_display_end();
+    }
+}
+
+static void publish_ssid(const char *ssid)
+{
+    taskENTER_CRITICAL();
+    strncpy(latest.ssid,ssid,sizeof(latest.ssid)-1);
+    latest.ssid[sizeof(latest.ssid)-1]='\0';latest.ssid_valid=true;
+    taskEXIT_CRITICAL();
+    if(alarm_service_display_begin()) {
+        main_page_redraw_wifi_ssid(ssid);alarm_service_display_end();
+    }
+}
+
 static bool elapsed(TickType_t now, TickType_t last, uint32_t milliseconds)
 {
     return (TickType_t)(now - last) >= pdMS_TO_TICKS(milliseconds);
@@ -42,10 +104,15 @@ static void clock_loop(void *unused)
     {
         rtc_date_time_t date = {0};
         rtc_get_time(&date);
-        if (date.year >= 2020 && date.year <= 2099)
-        {
-            main_page_redraw_time(&date);
-            main_page_redraw_date(&date);
+        if(alarm_service_display_begin()) {
+            bool redraw;
+            taskENTER_CRITICAL();redraw=main_redraw_requested;main_redraw_requested=false;taskEXIT_CRITICAL();
+            if(redraw)restore_main(&date);
+            else if(date.year>=2020 && date.year<=2099) {
+                main_page_redraw_time(&date);
+                main_page_redraw_date(&date);
+            }
+            alarm_service_display_end();
         }
         if (++seconds % 10U == 0U) (void)workqueue_try_run(heartbeat, NULL);
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000));
@@ -64,8 +131,7 @@ static void sensor_loop(void *unused)
         if (ready && aht20_start_measurement() && aht20_wait_for_measurement() &&
             aht20_read_measurement(&temperature, &humidity))
         {
-            main_page_redraw_inner_temperature(temperature);
-            main_page_redraw_inner_humidity(humidity);
+            publish_indoor(temperature,humidity);
             clock_log("[AHT20] T=%.1f C RH=%.1f %%\r\n", (double)temperature, (double)humidity);
         }
         else
@@ -83,8 +149,7 @@ static void sensor_loop(void *unused)
                       name, (unsigned)diagnostic.error, (unsigned long)diagnostic.hal_status,
                       (unsigned long)diagnostic.hal_error, (unsigned)diagnostic.status_valid,
                       (unsigned)diagnostic.status);
-            main_page_redraw_inner_temperature(NAN);
-            main_page_redraw_inner_humidity(NAN);
+            publish_indoor(NAN,NAN);
         }
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(CLOCK_SENSOR_INTERVAL_MS));
     }
@@ -129,9 +194,13 @@ static void update_weather(void)
         clock_log_line("[WEATHER] Request/parse failed; keeping previous weather");
         return;
     }
-    main_page_redraw_outdoor_city(weather.city);
-    main_page_redraw_outdoor_temperature(weather.temperature);
-    main_page_redraw_outdoor_weather_icon(weather.weather_code);
+    taskENTER_CRITICAL();latest.weather=weather;latest.weather_valid=true;taskEXIT_CRITICAL();
+    if(alarm_service_display_begin()) {
+        main_page_redraw_outdoor_city(weather.city);
+        main_page_redraw_outdoor_temperature(weather.temperature);
+        main_page_redraw_outdoor_weather_icon(weather.weather_code);
+        alarm_service_display_end();
+    }
     clock_log("[WEATHER] %s, %s, %.1f C\r\n", weather.city, weather.weather, weather.temperature);
 }
 
@@ -167,7 +236,7 @@ static void network_loop(void *unused)
             {
                 if (!was_connected || strcmp(last_ssid, info.ssid) != 0)
                 {
-                    main_page_redraw_wifi_ssid(info.ssid);
+                    publish_ssid(info.ssid);
                     memcpy(last_ssid, info.ssid, sizeof(last_ssid));
                     last_ssid[sizeof(last_ssid) - 1] = '\0';
                 }
@@ -175,7 +244,7 @@ static void network_loop(void *unused)
             }
             else if (was_connected || !last_ssid[0])
             {
-                main_page_redraw_wifi_ssid("wifi lost");
+                publish_ssid("wifi lost");
                 last_ssid[0] = '\0';
             }
             last_wifi = xTaskGetTickCount();

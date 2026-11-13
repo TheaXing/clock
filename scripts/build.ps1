@@ -1,7 +1,8 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [switch]$Clean,
-    [switch]$RgbTest
+    [switch]$RgbTest,
+    [switch]$ActiveBuzzer
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -16,7 +17,8 @@ if (!$cmake) { throw 'CMake was not found. Run from the STM32 build terminal or 
 Push-Location $repoRoot
 try {
     $rgb = if ($RgbTest) { 'ON' } else { 'OFF' }
-    & $cmake.Source --preset $Configuration "-DCLOCK_RGB_TEST=$rgb"
+    $active = if ($ActiveBuzzer) { 'ON' } else { 'OFF' }
+    & $cmake.Source --preset $Configuration "-DCLOCK_RGB_TEST=$rgb" "-DCLOCK_BUZZER_ACTIVE=$active"
     if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
     $buildArgs = @('--build', '--preset', $Configuration)
     if ($Clean) { $buildArgs += '--clean-first' }

@@ -65,6 +65,16 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  /* PA0/PC4/PC5 have external 10k pull-ups; pressed is LOW. */
+  GPIO_InitStruct.Pin = KEY1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(KEY1_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pin = KEY2_Pin | KEY3_Pin;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  /* Buzzer driver owns PC7 mode: AF2 while ringing in PWM builds,
+   * push-pull LOW while stopped; active-buzzer builds use GPIO only. */
+  HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, GPIO_PIN_RESET);
   /* USER CODE END MX_GPIO_Init_2 */
 
 }

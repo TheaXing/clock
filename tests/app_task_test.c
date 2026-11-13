@@ -45,7 +45,11 @@ typedef struct
     unsigned connected_ssid_outputs, lost_ssid_outputs;
 } observations_t;
 static observations_t observed;
-
+static bool display_blocked;
+static unsigned main_redraws;
+bool alarm_service_display_begin(void) {return !display_blocked;}
+void alarm_service_display_end(void) {}
+void main_page_display(void) {++main_redraws;}
 int app_test_printf(const char *format, ...) { (void)format; return 0; }
 int app_test_puts(const char *message) { (void)message; return 0; }
 int clock_log(const char *format, ...) { (void)format; return 0; }
@@ -229,17 +233,17 @@ void main_page_redraw_date(rtc_date_time_t *date)
 }
 void main_page_redraw_inner_temperature(float temperature)
 {
-    assert(running_task == TASK_SENSOR && observed.indoor_temperature_count < 8);
+    assert((running_task == TASK_SENSOR || running_task == TASK_CLOCK) && observed.indoor_temperature_count < 8);
     observed.indoor_temperature[observed.indoor_temperature_count++] = temperature;
 }
 void main_page_redraw_inner_humidity(float humidity)
 {
-    assert(running_task == TASK_SENSOR && observed.indoor_humidity_count < 8);
+    assert((running_task == TASK_SENSOR || running_task == TASK_CLOCK) && observed.indoor_humidity_count < 8);
     observed.indoor_humidity[observed.indoor_humidity_count++] = humidity;
 }
 void main_page_redraw_wifi_ssid(const char *ssid)
 {
-    assert(running_task == TASK_NETWORK);
+    assert(running_task == TASK_NETWORK || running_task == TASK_CLOCK);
     assert(strlen(ssid) < sizeof(observed.ssid));
     strcpy(observed.ssid, ssid);
     if (strcmp(ssid, "fixture-ap") == 0) ++observed.connected_ssid_outputs;
@@ -340,6 +344,21 @@ static void test_weather_cadence_survives_wrap_and_bad_response(void)
     assert(observed.connected_ssid_outputs == 1 && observed.lost_ssid_outputs == 0);
 }
 
+static void test_menu_does_not_stop_sampling_and_restores_latest_values(void)
+{
+    reset_scenario();
+    display_blocked=true;
+    run_task(TASK_SENSOR,0,12000);
+    assert(observed.sensor_read_calls==3);
+    assert(observed.indoor_temperature_count==0 && observed.indoor_humidity_count==0);
+    display_blocked=false;
+    app_request_main_redraw();
+    run_task(TASK_CLOCK,0,1000);
+    assert(main_redraws==1);
+    assert(observed.indoor_temperature_count==1 && observed.indoor_temperature[0]==22.25f);
+    assert(observed.indoor_humidity_count==1 && observed.indoor_humidity[0]==55.5f);
+}
+
 int main(void)
 {
     app_init();
@@ -349,6 +368,7 @@ int main(void)
     test_reconnect_refreshes_time_and_weather();
     test_hourly_sync_does_not_repeat_every_loop();
     test_weather_cadence_survives_wrap_and_bad_response();
-    fprintf(stdout, "app tasks: 5 behavior scenarios passed\n");
+    test_menu_does_not_stop_sampling_and_restores_latest_values();
+    fprintf(stdout, "app tasks: 6 behavior scenarios passed\n");
     return 0;
 }

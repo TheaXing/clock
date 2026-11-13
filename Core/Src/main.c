@@ -36,6 +36,7 @@
 #include "ui.h"
 #include "wifi.h"
 #include "page.h"
+#include "alarm_service.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -116,15 +117,10 @@ static void ClockInitTask(void *argument)
     ui_init();
     welcome_page_display();
     vTaskDelay(pdMS_TO_TICKS(1000));
-    wifi_page_display();
-    bool connected = wifi_init() && wifi_wait_connect();
-    if (!connected)
-    {
-        error_page_display("WiFi unavailable; retrying");
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
     main_page_display();
-    main_page_redraw_wifi_ssid(connected ? CLOCK_WIFI_SSID : "wifi lost");
+    main_page_redraw_wifi_ssid("connecting");
+    /* Local controls and restored schedules must run before a network wait. */
+    alarm_service_init();
     app_init();
     vTaskDelete(NULL);
 }
@@ -167,6 +163,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   MX_USART2_UART_Init();
   MX_I2C2_Init();
+  MX_I2C1_Init();
   clock_console_init();
   setvbuf(stdout, NULL, _IONBF, 0);
   clock_log("[SYS] Clock_CubeMX %s; %s %s\r\n", APP_VERSION, __DATE__, __TIME__);
