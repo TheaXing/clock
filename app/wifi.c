@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "wifi.h"
 #include "esp_at.h"
+#include "onenet_config.h"
 
 static bool initialized;
 
@@ -16,8 +17,27 @@ bool wifi_init(void)
         clock_log_line("[WIFI] Set CLOCK_WIFI_SSID in app/clock_config_local.h");
         return false;
     }
-    if (!esp_at_init() || !esp_at_wifi_init() || !esp_at_sntp_init())
+    if (!esp_at_init())
     {
+        clock_log_line("[WIFI] Initialization failed; local clock continues, retry pending");
+        return false;
+    }
+    char firmware[768];
+    if(esp_at_get_firmware_info(firmware,sizeof firmware))
+        clock_log("[ESP] Firmware information:\r\n%s",firmware);
+    else clock_log_line("[ESP] Firmware information unavailable");
+    esp_mqtt_probe_result_t probe=esp_at_probe_mqtt();
+    if(probe==ESP_MQTT_PROBE_TRANSPORT_ERROR) {
+        clock_log_line("[ONENET] MQTT probe transport failure; AT recovery will retry");
+        return false;
+    }
+    if(probe==ESP_MQTT_PROBE_SUPPORTED)
+        clock_log_line("[ONENET] MQTT state query accepted; TLS MQTT setup follows WiFi/SNTP");
+    else clock_log_line("[ONENET] MQTT state query rejected; configured MQTT setup will be attempted after WiFi/SNTP");
+    clock_log("[ONENET] Target %s:%u; product %s; device %s; token %s; connection follows WiFi/SNTP\r\n",
+        CLOCK_ONENET_MQTT_HOST,(unsigned)CLOCK_ONENET_MQTT_PORT,CLOCK_ONENET_PRODUCT_ID,
+        CLOCK_ONENET_DEVICE_NAME,CLOCK_ONENET_TOKEN[0]?"configured":"missing");
+    if (!esp_at_wifi_init() || !esp_at_sntp_init()) {
         clock_log_line("[WIFI] Initialization failed; local clock continues, retry pending");
         return false;
     }

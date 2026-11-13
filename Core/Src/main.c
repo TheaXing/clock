@@ -37,6 +37,9 @@
 #include "wifi.h"
 #include "page.h"
 #include "alarm_service.h"
+#include "clock_web.h"
+#include "web_session.h"
+#include "onenet_service.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -121,6 +124,10 @@ static void ClockInitTask(void *argument)
     main_page_redraw_wifi_ssid("connecting");
     /* Local controls and restored schedules must run before a network wait. */
     alarm_service_init();
+    uint32_t web_session=clock_web_session_token();
+    clock_web_init(web_session);
+    onenet_service_init();
+    if(!web_session)clock_log_line("[WEB] Session RNG unavailable; web control disabled, local functions continue");
     app_init();
     vTaskDelete(NULL);
 }
@@ -229,7 +236,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = 4;
+  RCC_OscInitStruct.PLL.PLLQ = 7; /* RNG clock 336/7=48MHz; CPU/APB unchanged. */
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();

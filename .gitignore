@@ -1,4 +1,19 @@
-build
-mx.scratch
-!.settings
-app/clock_config_local.h
+# Build output and CubeMX scratch files
+/build/
+/mx.scratch
+
+# Host-side tests kept only in this checkout
+/tests/
+
+# Machine-local configuration and credentials
+/app/clock_config_local.h
+/app/onenet_config_local.h
+/CMakeUserPresets.json
+/compile_commands.json
+
+# Editor caches and temporary files
+/.cache/
+/.vs/
+*.swp
+*.swo
+*~

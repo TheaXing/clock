@@ -168,6 +168,28 @@ SECTIONS
     _eccmram = .;       /* create a global symbol at ccmram end */
   } >CCMRAM AT> FLASH
 
+  /* CPU-only HTTP parser/JSON scratch. No flash image or reset-time copy;
+   * clock_web_init explicitly clears these before the network task starts. */
+  .clock_web_ram (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.clock_web_ram)
+    . = ALIGN(4);
+  } >CCMRAM
+  /* Network workspaces are CPU-only and explicitly initialized by owners. */
+  .clock_mqtt_ram (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.clock_mqtt_ram)
+    . = ALIGN(4);
+  } >CCMRAM
+  .clock_onenet_ram (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.clock_onenet_ram)
+    . = ALIGN(4);
+  } >CCMRAM
+
   /* used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 

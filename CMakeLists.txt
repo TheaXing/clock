@@ -64,6 +64,13 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     app/alarm/alarm_menu.c
     app/alarm/alarm_page.c
     app/alarm/alarm_service.c
+    app/web/clock_http.c
+    app/web/clock_web.c
+    app/web/web_page.c
+    app/web/web_session.c
+    app/onenet/onenet_service.c
+    app/onenet/onenet_model.c
+    app/onenet/onenet_ca.c
     BSP/Buzzer/buzzer.c
     BSP/Keys/board_keys.c
     BSP/BL24C512/bl24c512.c
@@ -116,6 +123,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     app
     app/page
     app/alarm
+    app/web
+    app/onenet
     BSP/Buzzer
     BSP/Keys
     BSP/BL24C512
@@ -133,6 +142,9 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/clock_config_local.h")
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CLOCK_LOCAL_CONFIG=1)
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/onenet_config_local.h")
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CLOCK_ONENET_LOCAL_CONFIG=1)
 endif()
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -u _printf_float)
 add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD

@@ -2,9 +2,9 @@
 
 **Goal:** Add schematic-correct buzzer, three keys, eight editable local alarms, and EEPROM power-loss configuration recovery, preserving clock/weather/AHT20.
 
-**Authority:** User explicitly requested direct implementation of eight local alarms. Schematic `D:/study/天气时钟2025/4、文档资料/原理图 V1.2.6.pdf`, pages 1/2/5/6/7/9, visually inspected.
+**Authority:** User explicitly requested direct implementation after choosing local phone web for a later stage. Schematic `D:/study/天气时钟2025/4、文档资料/原理图 V1.2.6.pdf`, pages 1/2/5/6/7/9, visually inspected. This stage contains no phone server.
 
-**Hardware:** PC7 buzzer through NPN, prefer TIM3 CH2 PWM about 2.73kHz with GPIO active-buzzer build option. PA0/PC4/PC5 external pull-ups, LOW pressed. H1 keeps the user-verified working soldered state; investigate the shared ESP wake signal only if interference appears. EEPROM I2C1 PB6/PB7, 100kHz, address 0x50, A0/A1/A2/WP grounded; B part per user, A marked schematic. AHT20 remains I2C2. Keep HAL TIM7/FreeRTOS exception ownership and proven SPI transport.
+**Hardware:** PC7 buzzer through NPN, prefer TIM3 CH2 PWM about 2.73kHz with GPIO active-buzzer build option. PA0/PC4/PC5 external pull-ups, LOW pressed. H1 must remain open when using KEY1 rather than ESP wake. EEPROM I2C1 PB6/PB7, 100kHz, address 0x50, A0/A1/A2/WP grounded; B part per user, A marked schematic. AHT20 remains I2C2. Keep HAL TIM7/FreeRTOS exception ownership and proven SPI transport.
 
 **Architecture:** Portable alarm engine with Gregorian dates, weekly masks and once dates; monotonic ringing/snooze deadlines; one local alarm service owns engine and UI editing; EEPROM worker persists snapshots then reports completion. Configuration switches only after durable save. Startup restores and starts local service before any WiFi wait. UI producers serialize full updates so menus are not overwritten by normal clock/weather updates. Main functions continue sampling/networking during menus.
 

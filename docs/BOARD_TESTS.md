@@ -1,6 +1,6 @@
 # Clock_CubeMX 移植与上板验收
 
-当前已加入 8 组本地闹钟、三个按键、蜂鸣器与 EEPROM 掉电保存。按键、响铃/贪睡和保存故障验收见 [ALARM_STAGE1_TESTS.md](ALARM_STAGE1_TESTS.md)。H1 保持用户已验证可用的焊接状态。
+当前 `v1.4.3-ONENET` 包含本地闹钟、局域网手机网页和 OneNET MQTT 远程控制，并修正首次 MQTT 清理和 OneNET 证书名称兼容问题。当前 OneNET 使用专用官方 CA/有效期校验，不发送 SNI，不提供产品 DNS 名称验证。云端物模型、连接日志、8 组闹钟下发及保存验收见 [ONENET_MQTT_TESTS.md](ONENET_MQTT_TESTS.md)；手机网页验收见 [ALARM_STAGE2_TESTS.md](ALARM_STAGE2_TESTS.md)；本地按键操作见 [ALARM_STAGE1_TESTS.md](ALARM_STAGE1_TESTS.md)。H1 保持用户已验证可用的焊接状态。
 
 源工程：`D:/code/Clock Project/11-1FreeRTOS - keil`。移植范围以其 Keil 实际编译清单和启动调用链为准：欢迎/联网/错误/主页面、RTC 日期星期及闪烁冒号、SNTP、WiFi 状态、AHT20 温湿度、实时天气与图标，以及实际使用的 8 套字体和 13 张图片。
 
@@ -20,7 +20,7 @@
 
 构建脚本会查找本机 STM32Cube 安装的 ARM GCC/Ninja；CMake 需在 PATH 中。主机测试使用 Visual Studio 2022 Community 的 C++ 编译工具，测试 UART/I2C/RTC/LCD 的替身不能替代物理硬件。
 
-当前版本为 `v1.2-ALARM`。验证入口覆盖原时钟、天气、AHT20、RTC、日志与新增本地闹钟；闹钟服务包含 21 个场景，保留严格 EEPROM 基线校验、字段合并以及菜单、响铃、贪睡和按键回归。构建支持完整时钟、独立 RGB 诊断和有源蜂鸣器选项。
+当前 v1.4.3-ONENET 验证结果（2026-11-13，ARM GCC 14.3.1）：Debug/Release 增量编译链接无警告；Flash 分别为 308012/259204 字节，主 SRAM 为 116600/116592 字节，CCM 均使用 15900 字节。ESP 解析与两种复位状态传输回归、OneNET 服务测试通过；v1.4 基线的完整主机回归、独立 RGB 和有源蜂鸣器构建已通过。Debug/Release 目录保留完整时钟、默认 PWM 蜂鸣器版本。MQTT 接收队列和工作缓冲位于显式初始化的 CCM，不用于 DMA。完整验证记录见 [ONENET_MQTT_TESTS.md](ONENET_MQTT_TESTS.md)。编译和主机替身不能证明真实 TLS 握手或云端在线。
 
 烧录产物位于 `build/Debug/`、`build/Release/` 下的 `Clock_CubeMX.elf`、`.hex`、`.bin`。BIN 烧录起始地址为 `0x08000000`。本次工作只编译，不自动连接或烧录开发板。
 
@@ -52,7 +52,7 @@
 3. **时间和保持**：核对 UTC+8 时间、日期、星期和冒号每秒变化。同步成功后暂时关闭 AP，按复位键，时间应继续而非重置；有 VBAT 时再做断主电保持测试。跨午夜、月末、闰年日期需单独确认。RTC/LSE 初始化失败会报告 `[RTC]`，仍继续显示和其他任务。
 4. **温湿度**：每约 3 秒刷新，数值与参考温湿度计大体一致。拔下传感器应显示占位并持续重试；重新接入应恢复。确认温度负值/异常值不会留下随机字符。
 5. **天气**：确认地点正确，室外温度和天气图标匹配，约每分钟查询一次。失效密钥、服务错误、网络超时期间保留最后一次有效天气；恢复后继续更新。检查旧天气账号的有效期和调用额度。
-6. **断网和模块恢复**：运行中关闭 AP 或重启 ESP，确认本地时间、温湿度和日志仍运行；恢复后重新显示 SSID、同步时间并更新天气。单次连接/HTTPS 等待最多约 20 秒，只占用网络任务。
+6. **断网和模块恢复**：运行中关闭 AP 或重启 ESP，确认本地时间、温湿度和日志仍运行；恢复后重新显示 SSID、同步时间并更新天气。配置 MQTT 后天气改用短超时 `HTTPCGET`，优先处理云端指令；DNS/TLS/慢速响应仍可能超时并触发 ESP 恢复，不能据此承诺任意网络故障下都在 5 秒内回复。故障期间保留最后有效天气，查询间隔约 60 秒。连接等待只占用网络任务。
 7. **持续运行**：至少运行数小时，观察堆历史最小值稳定、各任务栈有余量，无 HardFault、断言、卡屏或乱码。连续做 AP 开关、ESP 复位、传感器断开恢复。主机链接后的 SRAM 剩余同时供 newlib 动态堆使用，不能只看 FreeRTOS 堆余量。
 
 ## CubeMX 后续重新生成
@@ -69,7 +69,7 @@ RTC 的有限等待和保持日历逻辑位于 `Core/Src/rtc.c` 的 USER 区域�
 
 室内显示 `--` 且串口提示测量失败时，先核对采集协议。上一版沿用了旧驱动把 `0x71` 当作命令写入的做法；[Aosong AHT20 官方手册第 9 页](https://www.aosong.com/userfiles/files/media/AHT20%E4%BA%A7%E5%93%81%E6%89%8B%E5%86%8C%20A4%2020201222.pdf)中该字节表示 7 位地址 `0x38` 加读位。HAL 的 Master Receive 已自动发送此地址，现已删除多余写入，并在触发测量后至少等待 80 ms、校准命令后至少等待 10 ms。RTOS 延时加一个保护 tick，覆盖调用恰好靠近 tick 边界的情况。
 
-重新烧录后确认启动日志包含当前版本 `v1.2-ALARM`。正常每约 3 秒输出 `[AHT20] T=... C RH=... %`；失败日志包含 `stage`、`reason`、`HAL`、`I2C`、`status_valid` 和 `status`。
+重新烧录后确认启动日志包含当前版本 `v1.4.3-ONENET`。正常每约 3 秒输出 `[AHT20] T=... C RH=... %`；失败日志包含 `stage`、`reason`、`HAL`、`I2C`、`status_valid` 和 `status`。
 
 - `stage=initial-status`：初始状态读取；`calibration`/`calibration-status`：校准；`trigger`：启动测量；`wait-status`：等待转换；`data`：读取数据。
 - `reason`：1 写传输失败、2 读传输失败、3 校准超时、4 测量超时、5 未校准、6 参数无效、7 传感器忙。

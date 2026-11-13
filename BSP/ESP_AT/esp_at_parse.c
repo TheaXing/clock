@@ -34,6 +34,25 @@ static bool line_end(const char *p)
     return *p == '\0' || *p == '\n' || (p[0] == '\r' && p[1] == '\n');
 }
 
+bool esp_at_parse_station_ip(const char *response, char ip[16])
+{
+    const char *p = find_line(response, "+CIFSR:STAIP,");
+    if (p == NULL || ip == NULL || *p++ != '"') return false;
+    const char *start = p;
+    unsigned octet, nonzero = 0U;
+    for (unsigned n = 0U; n < 4U; ++n) {
+        const char *part = p;
+        if (!number(&p, 255U, &octet) || p - part > 3) return false;
+        nonzero |= octet;
+        if (n < 3U && *p++ != '.') return false;
+    }
+    size_t length = (size_t)(p - start);
+    if (nonzero == 0U || length >= 16U || *p++ != '"' || !line_end(p)) return false;
+    memcpy(ip, start, length);
+    ip[length] = '\0';
+    return true;
+}
+
 static bool quoted(const char **text, char *output, size_t capacity)
 {
     const char *p = *text;
@@ -162,7 +181,9 @@ static bool http_body(const char *response, char *body, size_t capacity)
 {
     bool received = false;
     size_t written = 0U;
-    const char *p = find_line(response, "+HTTPCLIENT:");
+    const char *prefix = "+HTTPCLIENT:";
+    const char *p = find_line(response, prefix);
+    if (p == NULL) { prefix = "+HTTPCGET:"; p = find_line(response, prefix); }
     while (p != NULL) {
         unsigned length;
         if (!number(&p, 2047U, &length) || *p++ != ',' || strlen(p) < length) goto invalid;
@@ -174,7 +195,7 @@ static bool http_body(const char *response, char *body, size_t capacity)
         received = received || length != 0U;
         p += length;
         if (!line_end(p)) goto invalid;
-        p = find_line(p, "+HTTPCLIENT:");
+        p = find_line(p, prefix);
     }
     if (body != NULL) body[written] = '\0';
     return received;

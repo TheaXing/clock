@@ -16,6 +16,8 @@
 #include "wifi.h"
 #include "workqueue.h"
 #include "alarm_service.h"
+#include "clock_web.h"
+#include "onenet_service.h"
 
 static TaskHandle_t clock_task, sensor_task, network_task;
 typedef struct {
@@ -26,6 +28,8 @@ typedef struct {
 } main_values_t;
 static main_values_t latest;
 static bool main_redraw_requested;
+static bool cloud_time_ready;
+static void network_background(void){onenet_service_poll((uint32_t)xTaskGetTickCount());}
 
 void app_request_main_redraw(void)
 {
@@ -58,6 +62,7 @@ static void restore_main(const rtc_date_time_t *date)
 
 static void publish_indoor(float temperature,float humidity)
 {
+    onenet_service_sensor(temperature,humidity);
     taskENTER_CRITICAL();
     latest.temperature=temperature;latest.humidity=humidity;latest.indoor_valid=true;
     taskEXIT_CRITICAL();
@@ -163,6 +168,7 @@ static bool synchronize(void)
         clock_log_line("[SNTP] Time not ready; retry pending");
         return false;
     }
+    cloud_time_ready=time.year>=2020U;
     if (!clock_rtc_ready()) return false;
     rtc_date_time_t date = {0};
     date.year = time.year; date.month = time.month; date.day = time.day;
@@ -187,7 +193,7 @@ static void update_weather(void)
         clock_log_line("[WEATHER] Configuration is too long");
         return;
     }
-    const char *response = esp_at_http_get(url);
+    const char *response = onenet_service_configured()?esp_at_http_get_bounded(url,1000U):esp_at_http_get(url);
     weather_info_t weather = {0};
     if (!response || !parse_seniverse_response(response, &weather))
     {
@@ -218,6 +224,10 @@ static void network_loop(void *unused)
     for (;;)
     {
         now = xTaskGetTickCount();
+        if(wifi_ready() && !esp_at_is_ready()) {
+            wifi_mark_unready();connected=false;synced=false;cloud_time_ready=false;
+            clock_web_network(false,(uint32_t)now);
+        }
         if (elapsed(now, last_wifi, CLOCK_WIFI_INTERVAL_MS))
         {
             bool was_connected = connected;
@@ -240,7 +250,13 @@ static void network_loop(void *unused)
                     memcpy(last_ssid, info.ssid, sizeof(last_ssid));
                     last_ssid[sizeof(last_ssid) - 1] = '\0';
                 }
-                if (!was_connected) { synced = false; first_weather = true; }
+                if (!was_connected) {
+                    synced=false;cloud_time_ready=false;
+                    /* A bounded weather timeout may restart ESP. Preserve its
+                     * retry cadence so recovery does not immediately repeat
+                     * the same failing request and tear down MQTT again. */
+                    if(!onenet_service_configured())first_weather=true;
+                }
             }
             else if (was_connected || !last_ssid[0])
             {
@@ -250,23 +266,31 @@ static void network_loop(void *unused)
             last_wifi = xTaskGetTickCount();
         }
         now = xTaskGetTickCount();
+        clock_web_network(connected,(uint32_t)now);
+        clock_web_poll((uint32_t)xTaskGetTickCount());
         if (connected && elapsed(now, last_sync, synced ? CLOCK_SYNC_INTERVAL_MS : CLOCK_SYNC_RETRY_MS))
         {
             synced = synchronize();
             last_sync = xTaskGetTickCount();
+            clock_web_poll((uint32_t)xTaskGetTickCount());
         }
-        if (connected && (first_weather || elapsed(xTaskGetTickCount(), last_weather, CLOCK_WEATHER_INTERVAL_MS)))
+        onenet_service_network(connected,cloud_time_ready,(uint32_t)xTaskGetTickCount());
+        onenet_service_poll((uint32_t)xTaskGetTickCount());
+        if (connected && !onenet_service_busy() && (first_weather || elapsed(xTaskGetTickCount(), last_weather, CLOCK_WEATHER_INTERVAL_MS)))
         {
             update_weather();
             first_weather = false;
             last_weather = xTaskGetTickCount();
+            clock_web_poll((uint32_t)xTaskGetTickCount());
+            onenet_service_poll((uint32_t)xTaskGetTickCount());
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
 void app_init(void)
 {
+    clock_web_set_background_poll(network_background);
     BaseType_t created = xTaskCreate(clock_loop, "clock", 1024, NULL, 4, &clock_task);
     configASSERT(created == pdPASS);
     created = xTaskCreate(sensor_loop, "sensor", 1024, NULL, 3, &sensor_task);

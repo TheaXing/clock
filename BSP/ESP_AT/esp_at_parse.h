@@ -12,5 +12,6 @@ bool esp_at_validate_http(const char *response);
 bool esp_at_extract_http(const char *response, char *body, size_t capacity);
 bool esp_at_quote(const char *input, size_t max_input, char *output, size_t capacity);
 bool esp_at_valid_mac(const char *mac);
+bool esp_at_parse_station_ip(const char *response, char ip[16]);
 
 #endif

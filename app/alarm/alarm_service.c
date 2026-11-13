@@ -17,10 +17,12 @@
 /* The BSP and engine both use wrapping 32-bit milliseconds. */
 _Static_assert(configTICK_RATE_HZ == 1000, "Alarm service requires 1 kHz RTOS ticks");
 _Static_assert(sizeof(TickType_t) == sizeof(uint32_t), "Alarm service requires 32-bit ticks");
+#define REMOTE_RESULT_COUNT 8U
 
 typedef struct {
     alarm_entry_t base;
     alarm_entry_t entry;
+    uint16_t fields_mask; /* Zero retains physical/legacy diff merge. */
     uint8_t selected;
 } save_job_t;
 
@@ -29,6 +31,14 @@ typedef struct {
     uint32_t generation;
     alarm_config_t config;
 } save_result_t;
+
+typedef struct {
+    alarm_entry_t entry;
+    uint32_t expected_version;
+    uint32_t request_id;
+    uint16_t fields_mask;
+    uint8_t selected;
+} remote_job_t;
 
 /* No pointers into owner state cross to the slow display task. */
 typedef struct {
@@ -48,16 +58,30 @@ typedef struct {
 } view_snapshot_t;
 
 static SemaphoreHandle_t display_mutex;
-static QueueHandle_t save_queue, result_queue, view_queue;
+static QueueHandle_t save_queue, result_queue, view_queue, remote_queue;
 static volatile bool owns_display;
 static volatile uint32_t display_epoch;
 static bool initialized;
+/* Shared with network tasks only inside short RTOS critical sections. Neither
+ * the engine nor the physical menu is ever touched by a network caller. */
+static struct {
+    alarm_service_snapshot_t snapshot;
+    uint32_t pending_id;
+    uint32_t next_id;
+    struct {
+        uint32_t id;
+        alarm_remote_result_t result;
+    } completed[REMOTE_RESULT_COUNT];
+    uint8_t completed_next;
+} published;
 static alarm_store_t store;
 static struct {
     alarm_engine_t engine;
     alarm_menu_t menu;
     rtc_date_time_t now;
     uint32_t revision;
+    uint32_t state_version;
+    uint32_t save_request_id; /* Zero denotes a physical-menu save. */
     uint32_t last_engine_ms;
     uint32_t last_view_ms;
     uint32_t test_due_ms;
@@ -73,6 +97,121 @@ static struct {
     bool dirty;
     const char *message;
 } owner;
+
+static bool local_editor_active(void)
+{
+    return owner.menu.view == ALARM_VIEW_EDIT || owner.menu.view == ALARM_VIEW_CLOCK;
+}
+
+static void publish_service_snapshot(void)
+{
+    alarm_service_snapshot_t snapshot;
+    memset(&snapshot, 0, sizeof snapshot);
+    snapshot.config = owner.engine.config;
+    snapshot.now = owner.now;
+    snapshot.revision = owner.revision;
+    snapshot.state_version = owner.state_version;
+    snapshot.ringing_mask = owner.engine.ringing_mask;
+    snapshot.snoozed_mask = owner.engine.snoozed_mask;
+    snapshot.time_valid = owner.time_valid;
+    snapshot.saving = owner.saving;
+    snapshot.storage_ok = owner.storage_ok;
+    snapshot.test_pending = owner.test_pending;
+    snapshot.test_ringing = owner.test_ringing;
+    snapshot.local_editing = local_editor_active();
+    taskENTER_CRITICAL();
+    published.snapshot = snapshot;
+    taskEXIT_CRITICAL();
+}
+
+bool alarm_service_snapshot(alarm_service_snapshot_t *snapshot)
+{
+    bool available;
+    if (snapshot == NULL) return false;
+    taskENTER_CRITICAL();
+    available = initialized;
+    if (available) *snapshot = published.snapshot;
+    taskEXIT_CRITICAL();
+    return available;
+}
+
+static alarm_remote_submit_t remote_submit(uint8_t index, const alarm_entry_t *entry,
+    uint16_t fields_mask, uint32_t expected_version, uint32_t *request_id)
+{
+    remote_job_t job;
+    alarm_remote_submit_t result;
+    if (index >= ALARM_COUNT || entry == NULL || request_id == NULL) return ALARM_REMOTE_INVALID;
+    job.entry = *entry;
+    if (!alarm_entry_valid(&job.entry)) return ALARM_REMOTE_INVALID;
+    job.selected = index;
+    job.fields_mask = fields_mask;
+    job.expected_version = expected_version;
+    taskENTER_CRITICAL();
+    if (!initialized) result = ALARM_REMOTE_UNAVAILABLE;
+    else if (published.pending_id != 0U || published.snapshot.saving
+             || published.snapshot.local_editing) result = ALARM_REMOTE_BUSY;
+    else if (expected_version != published.snapshot.state_version) result = ALARM_REMOTE_CONFLICT;
+    else {
+        job.request_id = published.next_id + 1U;
+        if (job.request_id == 0U) job.request_id = 1U;
+        /* One reservation covers both a queued request and its EEPROM job. */
+        if (xQueueSend(remote_queue, &job, 0U) != pdTRUE) result = ALARM_REMOTE_BUSY;
+        else {
+            published.next_id = job.request_id;
+            published.pending_id = job.request_id;
+            *request_id = job.request_id;
+            result = ALARM_REMOTE_ACCEPTED;
+        }
+    }
+    taskEXIT_CRITICAL();
+    return result;
+}
+
+alarm_remote_submit_t alarm_service_remote_submit(uint8_t index, const alarm_entry_t *entry,
+                                                  uint32_t expected_version, uint32_t *request_id)
+{
+    return remote_submit(index, entry, 0U, expected_version, request_id);
+}
+
+alarm_remote_result_t alarm_service_remote_result(uint32_t request_id)
+{
+    alarm_remote_result_t result = ALARM_REMOTE_UNKNOWN;
+    unsigned i;
+    taskENTER_CRITICAL();
+    if (initialized && request_id != 0U) {
+        if (request_id == published.pending_id) result = ALARM_REMOTE_PENDING;
+        else for (i = 0; i < REMOTE_RESULT_COUNT; ++i) {
+            if (request_id == published.completed[i].id) {
+                result = published.completed[i].result;
+                break;
+            }
+        }
+    }
+    taskEXIT_CRITICAL();
+    return result;
+}
+
+alarm_remote_submit_t alarm_service_remote_submit_patch(uint8_t index, const alarm_entry_t *entry,
+    uint16_t fields_mask, uint32_t expected_version, uint32_t *request_id)
+{
+    if (fields_mask == 0U || fields_mask > 0x01ffU) return ALARM_REMOTE_INVALID;
+    return remote_submit(index, entry, fields_mask, expected_version, request_id);
+}
+
+static void complete_remote(uint32_t request_id, alarm_remote_result_t result)
+{
+    if (request_id == 0U) return;
+    /* A caller observing SAVED must already be able to read the new config. */
+    publish_service_snapshot();
+    taskENTER_CRITICAL();
+    if (published.pending_id == request_id) {
+        published.completed[published.completed_next].id = request_id;
+        published.completed[published.completed_next].result = result;
+        published.completed_next = (uint8_t)((published.completed_next + 1U) % REMOTE_RESULT_COUNT);
+        published.pending_id = 0U;
+    }
+    taskEXIT_CRITICAL();
+}
 
 static bool read_eeprom(void *context, uint32_t address, void *data, size_t length)
 {
@@ -116,16 +255,21 @@ static void merge_edited_entry(alarm_entry_t *durable, const save_job_t *job)
 {
     /* A toggle based on unavailable/stale boot data must not replace fields
      * the user never edited, even within the selected alarm. */
-#define MERGE_FIELD(field) do { if (job->entry.field != job->base.field) durable->field = job->entry.field; } while (0)
-    MERGE_FIELD(year);
-    MERGE_FIELD(month);
-    MERGE_FIELD(day);
-    MERGE_FIELD(hour);
-    MERGE_FIELD(minute);
-    MERGE_FIELD(repeat_mask);
-    MERGE_FIELD(enabled);
-    MERGE_FIELD(ring_seconds);
-    MERGE_FIELD(snooze_seconds);
+    /* Explicit cloud fields carry intent even when equal to the RAM base.
+     * Other callers retain their existing edit-difference semantics. */
+#define MERGE_FIELD(field, bit) do { \
+    if (job->fields_mask != 0U ? (job->fields_mask & (1U << (bit))) != 0U \
+        : job->entry.field != job->base.field) durable->field = job->entry.field; \
+} while (0)
+    MERGE_FIELD(enabled, 0U);
+    MERGE_FIELD(hour, 1U);
+    MERGE_FIELD(minute, 2U);
+    MERGE_FIELD(repeat_mask, 3U);
+    MERGE_FIELD(year, 4U);
+    MERGE_FIELD(month, 5U);
+    MERGE_FIELD(day, 6U);
+    MERGE_FIELD(ring_seconds, 7U);
+    MERGE_FIELD(snooze_seconds, 8U);
 #undef MERGE_FIELD
 }
 
@@ -146,7 +290,8 @@ static void save_worker(void *argument)
             }
             if (result.result == ALARM_STORE_OK || result.result == ALARM_STORE_EMPTY
                 || result.result == ALARM_STORE_CORRUPT) {
-                if (job.selected < ALARM_COUNT && alarm_entry_valid(&job.entry)) {
+                if (job.selected < ALARM_COUNT && alarm_entry_valid(&job.entry)
+                    && job.fields_mask <= 0x01ffU) {
                     merge_edited_entry(&result.config.entries[job.selected], &job);
                     result.result = alarm_config_valid(&result.config)
                         ? alarm_store_save(&store, &result.config) : ALARM_STORE_INVALID;
@@ -210,21 +355,27 @@ static void collect_save_result(void)
     if (result.result == ALARM_STORE_OK && alarm_engine_apply(&owner.engine, &result.config)) {
         owner.storage_ok = true;
         owner.revision = result.generation;
+        ++owner.state_version;
+        if (owner.state_version == 0U) owner.state_version = 1U;
         owner.message = "Saved";
-        alarm_menu_saved(&owner.menu, true);
+        if (owner.save_request_id == 0U) alarm_menu_saved(&owner.menu, true);
+        complete_remote(owner.save_request_id, ALARM_REMOTE_SAVED);
         clock_log("Alarm configuration saved, generation %lu\r\n", (unsigned long)owner.revision);
     } else {
         owner.storage_ok = false;
         owner.message = "Save failed";
-        alarm_menu_saved(&owner.menu, false);
+        if (owner.save_request_id == 0U) alarm_menu_saved(&owner.menu, false);
+        complete_remote(owner.save_request_id, ALARM_REMOTE_FAILED);
         clock_log("Alarm save failed (%u); running configuration retained\r\n", (unsigned)result.result);
     }
+    owner.save_request_id = 0U;
     owner.dirty = true;
 }
 
 static void request_save(void)
 {
     save_job_t job;
+    job.fields_mask = 0U;
     job.selected = owner.menu.selected;
     job.entry = owner.menu.draft;
     if (job.selected >= ALARM_COUNT) {
@@ -241,7 +392,33 @@ static void request_save(void)
         return;
     }
     owner.saving = true;
+    owner.save_request_id = 0U;
     owner.message = "Saving...";
+}
+
+static void collect_remote_request(void)
+{
+    remote_job_t request;
+    save_job_t job;
+    if (xQueueReceive(remote_queue, &request, 0U) != pdTRUE) return;
+    /* Keys run first: a physical draft/save created since submission wins.
+     * Rechecking the version here also closes the publish/enqueue race. */
+    if (owner.saving || local_editor_active() || request.expected_version != owner.state_version) {
+        complete_remote(request.request_id, ALARM_REMOTE_FAILED);
+        return;
+    }
+    job.selected = request.selected;
+    job.entry = request.entry;
+    job.fields_mask = request.fields_mask;
+    job.base = owner.engine.config.entries[job.selected];
+    if (xQueueSend(save_queue, &job, 0U) != pdTRUE) {
+        complete_remote(request.request_id, ALARM_REMOTE_FAILED);
+        return;
+    }
+    owner.saving = true;
+    owner.save_request_id = request.request_id;
+    owner.message = "Saving...";
+    owner.dirty = true;
 }
 
 static void set_clock(void)
@@ -419,14 +596,17 @@ static void alarm_task(void *argument)
         poll_engine(now_ms);
         poll_diagnostic(now_ms);
         handle_input(board_keys_poll(now_ms), now_ms);
+        collect_remote_request();
         update_buzzer(now_ms);
         publish_view(now_ms);
+        publish_service_snapshot();
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(10U));
     }
 }
 
 static void cleanup_resources(void)
 {
+    if (remote_queue != NULL) vQueueDelete(remote_queue);
     if (view_queue != NULL) vQueueDelete(view_queue);
     if (result_queue != NULL) vQueueDelete(result_queue);
     if (save_queue != NULL) vQueueDelete(save_queue);
@@ -435,6 +615,7 @@ static void cleanup_resources(void)
     result_queue = NULL;
     save_queue = NULL;
     display_mutex = NULL;
+    remote_queue = NULL;
 }
 
 void alarm_service_init(void)
@@ -446,6 +627,7 @@ void alarm_service_init(void)
     uint32_t now_ms;
     if (initialized) return;
     memset(&owner, 0, sizeof owner);
+    memset(&published, 0, sizeof published);
     owns_display = false;
     display_epoch = 0U;
     buzzer_init();
@@ -460,6 +642,8 @@ void alarm_service_init(void)
     else if (loaded == ALARM_STORE_CORRUPT) owner.message = "Storage invalid";
     else owner.message = "EEPROM unavailable";
     owner.revision = store.generation;
+    owner.state_version = owner.revision + 1U;
+    if (owner.state_version == 0U) owner.state_version = 1U;
     alarm_engine_init(&owner.engine, &config);
     alarm_menu_init(&owner.menu);
     rtc_get_time(&owner.now);
@@ -470,7 +654,9 @@ void alarm_service_init(void)
     save_queue = xQueueCreate(1U, (UBaseType_t)sizeof(save_job_t));
     result_queue = xQueueCreate(1U, (UBaseType_t)sizeof(save_result_t));
     view_queue = xQueueCreate(1U, (UBaseType_t)sizeof(view_snapshot_t));
-    if (display_mutex == NULL || save_queue == NULL || result_queue == NULL || view_queue == NULL) {
+    remote_queue = xQueueCreate(1U, (UBaseType_t)sizeof(remote_job_t));
+    if (display_mutex == NULL || save_queue == NULL || result_queue == NULL || view_queue == NULL
+        || remote_queue == NULL) {
         clock_log_line("Alarm service unavailable: queue/mutex allocation failed");
         cleanup_resources();
         return;
@@ -479,6 +665,7 @@ void alarm_service_init(void)
     owner.last_engine_ms = now_ms - 100U;
     owner.last_view_ms = now_ms;
     owner.dirty = true;
+    publish_service_snapshot();
     if (xTaskCreate(save_worker, "alarm-store", 1024U, NULL, 2U, &store_task) != pdPASS) goto failed;
     if (xTaskCreate(view_worker, "alarm-view", 1024U, NULL, 4U, &view_task) != pdPASS) goto failed;
     if (xTaskCreate(alarm_task, "alarm", 1536U, NULL, 9U, NULL) != pdPASS) goto failed;
