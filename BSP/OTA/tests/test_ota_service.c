@@ -25,7 +25,7 @@ static uint8_t queued[512];
 static size_t queued_size;
 static bool queue_full, lock_held, fail_store, reject_gate, unavailable, wrong_identity;
 static bool lost_ack, fail_enqueue, fail_lock, fail_load;
-static unsigned saves, resets, released;
+static unsigned saves, resets, released, loads;
 static uint32_t tick;
 static uint32_t load_delay;
 static alarm_maintenance_state_t gate;
@@ -34,6 +34,28 @@ static bool software_reset, editing;
 static uint8_t snapshot_busy;
 static unsigned http_checks;
 static const char *http_response;
+static ota_store_result_t load_result = OTA_STORE_OK;
+#ifdef OTA_TEST_CRITICAL_HOOK
+static unsigned critical_depth;
+static bool preempt_on_critical;
+static void pulse_local(uint8_t sources);
+
+/** 功能：在最外层临界区生效前模拟高优先级生产者抢占；参数：无；返回：无。 */
+void ota_test_enter_critical(void) {
+    if (critical_depth == 0U && preempt_on_critical) {
+        preempt_on_critical = false;
+        ++tick;
+        pulse_local(OTA_HEARTBEAT_ALL);
+    }
+    ++critical_depth;
+}
+
+/** 功能：结束虚拟临界区并校验嵌套平衡；参数：无；返回：无。 */
+void ota_test_exit_critical(void) {
+    assert(critical_depth != 0U);
+    --critical_depth;
+}
+#endif
 
 /** 功能：模拟初始化时快照并清除复位原因；参数：无；返回：是否软件复位。 */
 bool ota_reset_was_software(void) {
@@ -196,8 +218,12 @@ void alarm_service_maintenance_release(void) {
 /** 功能：读取内存日志并检查事务锁；参数：同公共日志接口；返回：读取成功。 */
 ota_store_result_t ota_journal_load(const ota_journal_io_t *io, ota_record_t *record) {
     assert(lock_held && io->read != NULL && io->write != NULL);
+    ++loads;
     if (fail_load) {
         return OTA_STORE_IO;
+    }
+    if (load_result != OTA_STORE_OK) {
+        return load_result;
     }
     tick += load_delay;
     *record = persisted;
@@ -249,6 +275,9 @@ void NVIC_SystemReset(void) {
 static void expect_state(const char *state) {
     char status[512];
     ota_service_status(status, sizeof status, 123U);
+    if (strstr(status, state) == NULL) {
+        fprintf(stderr, "Expected %s in OTA status %s\n", state, status);
+    }
     assert(strstr(status, state) != NULL);
     assert(strstr(status, "abcdef0123456789") == NULL);
 }
@@ -400,11 +429,17 @@ int main(int argc, char **argv) {
         ota_service_network_poll(tick);
         run_worker();
         assert(persisted.state == OTA_STATE_TRIAL && saves == 1U);
+        expect_state("\"error\":5");
+        expect_state("\"health\":\"journal-save\"");
+        expect_state("\"journal\":\"io\"");
         fail_store = false;
         advance_local(20000U, OTA_HEARTBEAT_ALL);
         ota_service_network_poll(tick);
         run_worker();
         assert(persisted.state == OTA_STATE_CONFIRMED && saves == 2U);
+        expect_state("\"error\":0");
+        expect_state("\"health\":\"confirmed\"");
+        expect_state("\"journal\":\"ok\"");
     } else if (scenario == 21U) {
         expect_state("\"version\":18");
     } else if (scenario == 22U) {
@@ -485,6 +520,76 @@ int main(int argc, char **argv) {
         ota_service_network_poll(tick);
         run_worker();
         assert(persisted.state == OTA_STATE_CONFIRMED && saves == 1U);
+    } else if (scenario >= 31U && scenario <= 38U) {
+        static const ota_store_result_t terminal_results[] = {
+            OTA_STORE_EMPTY, OTA_STORE_CORRUPT, OTA_STORE_INVALID
+        };
+        static const char *const terminal_names[] = {
+            "\"journal\":\"empty\"", "\"journal\":\"corrupt\"", "\"journal\":\"invalid\""
+        };
+        pulse_local(OTA_HEARTBEAT_ALL);
+        advance_local(10000U, OTA_HEARTBEAT_ALL);
+        ota_service_network_poll(tick);
+        assert(queue_full);
+        if (scenario == 31U || scenario >= 35U) {
+            fail_load = scenario == 31U || scenario == 35U || scenario == 36U;
+            fail_lock = scenario == 37U;
+            unavailable = scenario == 38U;
+            run_worker();
+            expect_state("\"error\":5");
+            expect_state(scenario == 37U ? "\"health\":\"lock\"" :
+                         scenario == 38U ? "\"health\":\"unavailable\"" :
+                         "\"health\":\"journal-read\"");
+            expect_state(scenario >= 37U ? "\"journal\":\"unread\"" : "\"journal\":\"io\"");
+            assert(saves == 0U && resets == 0U);
+            fail_load = scenario == 36U;
+            fail_lock = false;
+            unavailable = false;
+            advance_local(20000U, OTA_HEARTBEAT_ALL);
+            ota_service_network_poll(tick);
+        }
+        if (scenario >= 32U && scenario <= 35U) {
+            unsigned terminal = scenario == 35U ? 1U : scenario - 32U;
+            load_result = terminal_results[terminal];
+            run_worker();
+            expect_state("\"autoState\":\"blocked\"");
+            expect_state("\"health\":\"blocked\"");
+            expect_state(terminal_names[terminal]);
+            expect_state("\"error\":0");
+            unsigned completed_loads = loads;
+            advance_local(40000U, OTA_HEARTBEAT_ALL);
+            ota_service_network_poll(tick);
+            ota_service_autocheck_poll(true, tick);
+            run_worker();
+            assert(loads == completed_loads && http_checks == 0U && saves == 0U && resets == 0U);
+        } else {
+            run_worker();
+            if (scenario == 36U) {
+                expect_state("\"error\":5");
+                expect_state("\"health\":\"journal-read\"");
+                expect_state("\"journal\":\"io\"");
+                assert(loads == 2U && saves == 0U && resets == 0U);
+            } else {
+                assert(persisted.state == OTA_STATE_CONFIRMED && saves == 1U);
+                expect_state("\"error\":0");
+                expect_state("\"health\":\"confirmed\"");
+                expect_state("\"journal\":\"ok\"");
+            }
+        }
+#ifdef OTA_TEST_CRITICAL_HOOK
+    } else if (scenario == 39U || scenario == 40U || scenario == 41U) {
+        pulse_local(OTA_HEARTBEAT_ALL);
+        advance_local(10000U, OTA_HEARTBEAT_ALL);
+        preempt_on_critical = scenario != 41U;
+        if (scenario == 40U) {
+            ota_service_heartbeat(OTA_HEARTBEAT_CLOCK);
+        }
+        ota_service_network_poll(tick);
+        assert(queue_full);
+        preempt_on_critical = scenario == 41U;
+        run_worker();
+        assert(persisted.state == OTA_STATE_CONFIRMED && saves == 1U);
+#endif
     } else {
         assert(false);
     }

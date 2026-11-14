@@ -85,6 +85,9 @@ int main(int argc, char **argv) {
             assert(http_checks == 0U && persisted.state == OTA_STATE_TRIAL);
         }
         run_worker();
+        if (scenario == 11U) {
+            expect_state("\"health\":\"retry-pending\"");
+        }
         unsigned confirmation_saves = saves;
         editing = scenario == 6U;
         snapshot_busy = scenario >= 22U && scenario <= 26U ? (uint8_t)(1U << (scenario - 22U)) : 0U;

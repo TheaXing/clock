@@ -9,6 +9,7 @@
 I2C_HandleTypeDef hi2c1;
 static bool locked, allocation_failed;
 static unsigned irq, creates, takes, gives, suspend_depth, delays;
+static uint32_t interrupt_mask;
 static int scheduler = taskSCHEDULER_RUNNING;
 static uint8_t memory[65536];
 
@@ -40,6 +41,33 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t mutex) {
 /** 功能：返回虚拟中断上下文；参数：无；返回：异常编号。 */
 uint32_t __get_IPSR(void) {
     return irq;
+}
+
+/** 功能：读取模拟中断屏蔽位；参数：无；返回：当前屏蔽值。 */
+uint32_t __get_PRIMASK(void) {
+    return interrupt_mask;
+}
+
+/** 功能：模拟关闭中断；参数：无；返回：无。 */
+void __disable_irq(void) {
+    interrupt_mask = 1U;
+}
+
+/** 功能：恢复中断屏蔽位；参数：value，原始屏蔽值；返回：无。 */
+void __set_PRIMASK(uint32_t value) {
+    interrupt_mask = value;
+}
+
+/** 功能：提供成功传输的 HAL 错误码；参数：bus，总线；返回：零。 */
+uint32_t HAL_I2C_GetError(I2C_HandleTypeDef *bus) {
+    assert(bus == &hi2c1);
+    return 0U;
+}
+
+/** 功能：提供成功传输的 HAL 状态；参数：bus，总线；返回：就绪状态。 */
+HAL_I2C_StateTypeDef HAL_I2C_GetState(I2C_HandleTypeDef *bus) {
+    assert(bus == &hi2c1);
+    return HAL_I2C_STATE_READY;
 }
 
 /** 功能：返回虚拟调度状态；参数：无；返回：调度状态。 */

@@ -17,8 +17,15 @@ typedef uint32_t TickType_t;
 #define taskSCHEDULER_RUNNING 2
 #define taskSCHEDULER_NOT_STARTED 0
 #define taskSCHEDULER_SUSPENDED 1
+#ifdef OTA_TEST_CRITICAL_HOOK
+void ota_test_enter_critical(void);
+void ota_test_exit_critical(void);
+#define taskENTER_CRITICAL() ota_test_enter_critical()
+#define taskEXIT_CRITICAL() ota_test_exit_critical()
+#else
 #define taskENTER_CRITICAL() ((void)0)
 #define taskEXIT_CRITICAL() ((void)0)
+#endif
 void *pvPortMalloc(size_t size);
 void vPortFree(void *pointer);
 #endif

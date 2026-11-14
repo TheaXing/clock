@@ -63,6 +63,8 @@ static struct {
     uint32_t healthy_ms; // 本地服务就绪的毫秒时刻
     uint32_t heartbeat_ms[3]; // 时钟、绘图和闹钟最近实际进展的毫秒时刻
     uint32_t error; // 不包含凭据的固定错误编号
+    const char *health; // 最近健康确认阶段或失败原因，仅引用固定公开字符串
+    const char *journal; // 最近健康确认的日志访问结果，尚未访问时为 unread
     bool available; // 工作任务与事务锁是否可用
     bool started; // 本地服务是否已经启动
     bool confirmation_queued; // 是否已经提交过健康检查工作
@@ -97,10 +99,12 @@ static bool heartbeats_fresh(uint32_t now_ms) {
            now_ms - service.heartbeat_ms[2] <= 1000U;
 }
 
-/** 功能：检查连续十秒健康并在缺失或过期时重启窗口；参数：now_ms，当前毫秒；返回：可确认时为真。 */
-static bool local_health_ready(uint32_t now_ms) {
+/** 功能：在临界区内取时并检查连续十秒健康，缺失或过期时重启窗口；参数：无；返回：可确认时为真。 */
+static bool local_health_ready(void) {
     bool ready;
+    uint32_t now_ms;
     taskENTER_CRITICAL();
+    now_ms = (uint32_t)xTaskGetTickCount();
     if (!service.started || !heartbeats_fresh(now_ms)) {
         service.health_tracking = false;
         service.healthy_ms = now_ms;
@@ -117,7 +121,7 @@ static bool local_health_ready(uint32_t now_ms) {
 /** 功能：由真实本地生产者报告进展并独立于网络等待检测失活；参数：source，单个来源位；返回：无。 */
 void ota_service_heartbeat(uint8_t source) {
     unsigned index;
-    uint32_t now_ms = (uint32_t)xTaskGetTickCount();
+    uint32_t now_ms;
     if (source == OTA_HEARTBEAT_CLOCK) {
         index = 0U;
     } else if (source == OTA_HEARTBEAT_UI) {
@@ -128,6 +132,7 @@ void ota_service_heartbeat(uint8_t source) {
         return;
     }
     taskENTER_CRITICAL();
+    now_ms = (uint32_t)xTaskGetTickCount();
     if (service.available && service.started) {
         bool before = heartbeats_fresh(now_ms);
         service.heartbeat_ms[index] = now_ms;
@@ -310,7 +315,7 @@ static void persist_request(const ota_job_t *job) {
     result = ota_journal_load(&io, &record);
     if (result == OTA_STORE_OK && job->kind == OTA_JOB_AUTO) {
         ota_manifest_t candidate;
-        if (!local_health_ready((uint32_t)xTaskGetTickCount()) ||
+        if (!local_health_ready() ||
             alarm_service_maintenance_state() != ALARM_MAINTENANCE_ACTIVE ||
             !auto_record_allowed(&record) || !ota_manifest_read_hint(job->manifest, &candidate) ||
             candidate.version <= current_manifest.version) {
@@ -348,6 +353,7 @@ static void persist_request(const ota_job_t *job) {
 
 /** 功能：仅确认与当前认证安装描述完全匹配的 TRIAL，不覆盖任何升级请求；参数：无；返回：检查完成返回真，暂时性故障需稍后重试返回假。 */
 static bool confirm_running_image(void) {
+    static const char *const journal_names[] = {"ok", "empty", "corrupt", "io", "invalid"};
     ota_record_t record;
     ota_manifest_t trial;
     ota_journal_io_t io = {read_eeprom, write_eeprom, NULL};
@@ -355,18 +361,36 @@ static bool confirm_running_image(void) {
     bool valid;
     ota_store_result_t result;
     if (!current_valid) {
+        taskENTER_CRITICAL();
+        service.health = "identity";
+        service.auto_state = OTA_AUTO_BLOCKED;
+        service.auto_finished = true;
+        taskEXIT_CRITICAL();
         return true;
     }
-    if (!local_health_ready((uint32_t)xTaskGetTickCount())) {
+    if (!local_health_ready()) {
+        taskENTER_CRITICAL();
+        service.health = "stale";
+        taskEXIT_CRITICAL();
         return false;
     }
     if (!alarm_service_snapshot(&snapshot)) {
+        taskENTER_CRITICAL();
+        service.health = "unavailable";
+        taskEXIT_CRITICAL();
         return false;
     }
     if (!bl24c512_transaction_begin()) {
+        taskENTER_CRITICAL();
+        service.health = "lock";
+        taskEXIT_CRITICAL();
         return false;
     }
     result = ota_journal_load(&io, &record);
+    taskENTER_CRITICAL();
+    service.journal = journal_names[(unsigned)result <= OTA_STORE_INVALID ? (unsigned)result : OTA_STORE_INVALID];
+    service.health = result == OTA_STORE_IO ? "journal-read" : "blocked";
+    taskEXIT_CRITICAL();
     valid = result == OTA_STORE_OK && record.state == OTA_STATE_TRIAL;
     if (valid) {
         /* 日志允许保存原始包头或已提交的安装描述；两者只有末尾提交字不同。 */
@@ -376,20 +400,32 @@ static bool confirm_running_image(void) {
                 ota_constant_equal(trial.raw, current_manifest.raw, 252U);
     }
     if (valid) {
-        if (!local_health_ready((uint32_t)xTaskGetTickCount())) {
+        if (!local_health_ready()) {
+            taskENTER_CRITICAL();
+            service.health = "stale";
+            taskEXIT_CRITICAL();
             bl24c512_transaction_end();
             return false;
         }
         record.state = OTA_STATE_CONFIRMED;
         record.error = 0U;
         result = ota_journal_save(&io, &record);
+        taskENTER_CRITICAL();
+        service.journal = journal_names[(unsigned)result <= OTA_STORE_INVALID ? (unsigned)result : OTA_STORE_INVALID];
+        service.health = result == OTA_STORE_IO ? "journal-save" : "blocked";
+        taskEXIT_CRITICAL();
     }
-    if (result == OTA_STORE_OK) {
-        bool confirmed = record.state == OTA_STATE_CONFIRMED && record_matches_current(&record);
-        bool retry = previous_auto_failed(&record);
+    if (result != OTA_STORE_IO) {
+        bool confirmed = result == OTA_STORE_OK && record.state == OTA_STATE_CONFIRMED &&
+                         record_matches_current(&record);
+        bool retry = result == OTA_STORE_OK && previous_auto_failed(&record);
         taskENTER_CRITICAL();
         service.auto_ready = confirmed || retry;
         service.retry_previous = retry;
+        service.health = confirmed ? "confirmed" : (retry ? "retry-pending" : "blocked");
+        if (service.error == 5U) {
+            service.error = 0U;
+        }
         if (retry) {
             memcpy(retry_manifest, record.manifest, sizeof retry_manifest);
         }
@@ -428,6 +464,8 @@ void ota_service_init(void) {
         return;
     }
     memset(&service, 0, sizeof service);
+    service.health = "waiting";
+    service.journal = "unread";
     service.normal_reset = ota_reset_is_normal_boot();
     if (!bl24c512_transaction_init()) {
         return;
@@ -457,6 +495,7 @@ void ota_service_start(void) {
         service.healthy_ms = (uint32_t)xTaskGetTickCount();
         service.heartbeat_seen = 0U;
         service.health_tracking = false;
+        service.health = current_valid ? "tracking" : "identity";
         service.started = true;
         taskEXIT_CRITICAL();
     }
@@ -512,7 +551,7 @@ void ota_service_network_poll(uint32_t now_ms) {
     }
     if (service.available && service.started && !service.confirmation_queued &&
         service.state != OTA_REQUEST_QUEUED && service.state != OTA_REQUEST_SAVED &&
-        local_health_ready(now_ms) && alarm_service_snapshot(&snapshot)) {
+        local_health_ready() && alarm_service_snapshot(&snapshot)) {
         if (xQueueSend(jobs, &job, 0U) == pdTRUE) {
             service.confirmation_queued = true;
         }
@@ -540,7 +579,7 @@ void ota_service_autocheck_poll(bool connected, uint32_t now_ms) {
         service.auto_state = OTA_AUTO_WAITING;
         return;
     }
-    if (!local_health_ready(now_ms) || !service.auto_ready || !current_valid) {
+    if (!local_health_ready() || !service.auto_ready || !current_valid) {
         service.auto_state = OTA_AUTO_HEALTH;
         return;
     }
@@ -621,6 +660,7 @@ void ota_service_status(char *output, size_t capacity, uint32_t session) {
     char identity[33] = {0};
     ota_request_state_t state;
     uint32_t id, error;
+    const char *health, *journal;
     ota_auto_state_t auto_state;
     uint8_t auto_checks;
     if (output == NULL || capacity == 0U) {
@@ -635,13 +675,16 @@ void ota_service_status(char *output, size_t capacity, uint32_t session) {
     state = service.state;
     id = service.id;
     error = service.error;
+    health = service.health != NULL ? service.health : "waiting";
+    journal = service.journal != NULL ? service.journal : "unread";
     auto_state = service.auto_state;
     auto_checks = service.auto_checks;
     taskEXIT_CRITICAL();
     (void)snprintf(output, capacity,
                    "{\"enabled\":%s,\"session\":%lu,\"version\":%lu,\"identity\":\"%s\","
                    "\"state\":\"%s\",\"error\":%lu,\"saving\":%s,\"id\":%lu,"
-                   "\"autoEnabled\":%s,\"autoState\":\"%s\",\"autoChecks\":%u}",
+                   "\"autoEnabled\":%s,\"autoState\":\"%s\",\"autoChecks\":%u,"
+                   "\"health\":\"%s\",\"journal\":\"%s\"}",
                    service.available && service.started && admin_enabled ? "true" : "false",
                    (unsigned long)session,
                    (unsigned long)(current_valid ? current_manifest.version : CLOCK_OTA_VERSION),
@@ -649,7 +692,7 @@ void ota_service_status(char *output, size_t capacity, uint32_t session) {
                    names[state], (unsigned long)error,
                    state == OTA_REQUEST_QUEUED ? "true" : "false", (unsigned long)id,
                    CLOCK_OTA_AUTO_CHECK ? "true" : "false", CLOCK_OTA_AUTO_CHECK ? auto_names[auto_state] : "disabled",
-                   (unsigned)auto_checks);
+                   (unsigned)auto_checks, health, journal);
 }
 
 #else
@@ -684,7 +727,8 @@ void ota_service_status(char *output, size_t capacity, uint32_t session) {
         (void)snprintf(output, capacity,
                        "{\"enabled\":false,\"session\":%lu,\"version\":0,\"identity\":\"\","
                        "\"state\":\"disabled\",\"error\":0,\"saving\":false,\"id\":0,"
-                       "\"autoEnabled\":false,\"autoState\":\"disabled\",\"autoChecks\":0}",
+                       "\"autoEnabled\":false,\"autoState\":\"disabled\",\"autoChecks\":0,"
+                       "\"health\":\"disabled\",\"journal\":\"unread\"}",
                        (unsigned long)session);
     }
 }

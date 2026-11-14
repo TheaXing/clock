@@ -17,6 +17,7 @@ void ota_service_heartbeat(uint8_t source);
 void ota_service_network_poll(uint32_t now_ms);
 /* 只由唯一网络所有者在健康确认及 HTTP 响应关闭之后发现候选，不访问应用 Flash。 */
 void ota_service_autocheck_poll(bool connected, uint32_t now_ms);
+/* 状态包含最近健康确认原因 health 与日志结果 journal；诊断字段不代表安装许可。 */
 void ota_service_status(char *output, size_t capacity, uint32_t session);
 /* 仅接受 session 与 token 两个不重复表单字段；返回 HTTP 状态码。 */
 int ota_service_request(const char *body, uint32_t session);

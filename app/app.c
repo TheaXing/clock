@@ -20,6 +20,7 @@
 #include "onenet_service.h"
 #if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
 #include "ota_service.h"
+#include "bl24c512.h"
 #endif
 
 static TaskHandle_t clock_task, sensor_task, network_task;
@@ -147,9 +148,19 @@ static void heartbeat(void *unused) {
               (unsigned long)uxTaskGetStackHighWaterMark(sensor_task),
               (unsigned long)uxTaskGetStackHighWaterMark(network_task));
 #if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
-    char ota_status[384];
+    char ota_status[512];
     ota_service_status(ota_status, sizeof ota_status, 0U);
     clock_log("OTA %s\r\n", ota_status);
+    bl24c512_diagnostic_t diagnostic;
+    bl24c512_get_diagnostic(&diagnostic);
+    if (diagnostic.valid) {
+        static const char *const operations[] = {"none", "read", "write", "ready"};
+        unsigned operation = diagnostic.operation < 4U ? diagnostic.operation : 0U;
+        clock_log("[EEPROM] Last failure: op=%s address=0x%04lX length=%u HAL=%lu error=0x%08lX state=0x%08lX\r\n",
+                  operations[operation], (unsigned long)diagnostic.address,
+                  (unsigned)diagnostic.length, (unsigned long)diagnostic.hal_status,
+                  (unsigned long)diagnostic.hal_error, (unsigned long)diagnostic.hal_state);
+    }
 #endif
 }
 

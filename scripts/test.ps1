@@ -5,6 +5,7 @@ $testCommands = @(
     'BSP/AHT20/tests/run_tests.ps1',
     'BSP/Console/tests/run_tests.ps1',
     'BSP/RTC/tests/run_tests.ps1',
+    'BSP/BL24C512/tests/run_tests.ps1',
     'BSP/OTA/tests/run_tests.ps1',
     'BSP/OTA/tests/run_http_tests.ps1',
     'BSP/OTA/tests/run_boot_net_tests.ps1',

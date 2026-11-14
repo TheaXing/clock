@@ -6,6 +6,51 @@
 #include "semphr.h"
 static SemaphoreHandle_t transaction_mutex;
 #endif
+static bl24c512_diagnostic_t diagnostic;
+
+/**
+ * 功能：在保留调用者中断屏蔽状态的条件下复制最近失败快照。
+ * 参数：out，接收诊断的输出，为空时不执行操作。
+ * 返回：无。
+ */
+void bl24c512_get_diagnostic(bl24c512_diagnostic_t *out) {
+    if (out != NULL) {
+        uint32_t mask = __get_PRIMASK();
+        __disable_irq();
+        *out = diagnostic;
+        __set_PRIMASK(mask);
+    }
+}
+
+/**
+ * 功能：在恢复任务调度前取得失败 HAL 调用的元数据。
+ * 参数：operation，操作类型；address，分块起始地址；length，分块长度；status，HAL 返回值。
+ * 返回：包含失败时 HAL 错误与状态的诊断快照。
+ */
+static bl24c512_diagnostic_t capture_failure(uint8_t operation, uint32_t address,
+                                            uint16_t length, HAL_StatusTypeDef status) {
+    bl24c512_diagnostic_t failure;
+    failure.valid = true;
+    failure.operation = operation;
+    failure.address = address;
+    failure.length = length;
+    failure.hal_status = (uint32_t)status;
+    failure.hal_error = HAL_I2C_GetError(&hi2c1);
+    failure.hal_state = (uint32_t)HAL_I2C_GetState(&hi2c1);
+    return failure;
+}
+
+/**
+ * 功能：原子发布最近失败快照，并保留调用者原有中断屏蔽状态。
+ * 参数：failure，待发布的完整失败快照。
+ * 返回：无。
+ */
+static void publish_failure(const bl24c512_diagnostic_t *failure) {
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    diagnostic = *failure;
+    __set_PRIMASK(mask);
+}
 
 /**
  * 功能：在调度器启动前创建整颗 EEPROM 的事务互斥锁。
@@ -113,14 +158,18 @@ static void poll_delay(void) {
 
 /**
  * 功能：有限次探测 EEPROM 写周期结束状态。
- * 参数：无。
+ * 参数：address，关联写页的起始地址；length，关联写页长度。
  * 返回：设备恢复应答返回 true，探测耗尽返回 false。
  */
-static bool wait_for_write(void) {
+static bool wait_for_write(uint32_t address, uint16_t length) {
+    bl24c512_diagnostic_t last_failure = {0};
     for (unsigned attempt = 0U; attempt < EEPROM_READY_ATTEMPTS; ++attempt) {
         bool protected = protect_transfer();
         HAL_StatusTypeDef status =
             HAL_I2C_IsDeviceReady(&hi2c1, EEPROM_ADDRESS, 1U, EEPROM_READY_TIMEOUT_MS);
+        if (status != HAL_OK) {
+            last_failure = capture_failure(BL24C512_OPERATION_READY, address, length, status);
+        }
         finish_transfer(protected);
         if (status == HAL_OK) {
             return true;
@@ -130,6 +179,8 @@ static bool wait_for_write(void) {
             poll_delay();
         }
     }
+    /* EEPROM 正常写周期内的短暂非应答不覆盖故障，仅在所有探测耗尽后发布。 */
+    publish_failure(&last_failure);
     return false;
 }
 
@@ -151,6 +202,11 @@ bool bl24c512_read(uint32_t address, void *data, size_t length) {
         HAL_StatusTypeDef status =
             HAL_I2C_Mem_Read(&hi2c1, EEPROM_ADDRESS, (uint16_t)address, I2C_MEMADD_SIZE_16BIT,
                              bytes, count, EEPROM_TRANSFER_TIMEOUT_MS);
+        if (status != HAL_OK) {
+            bl24c512_diagnostic_t failure =
+                capture_failure(BL24C512_OPERATION_READ, address, count, status);
+            publish_failure(&failure);
+        }
         finish_transfer(protected);
         if (status != HAL_OK) {
             return false;
@@ -183,8 +239,13 @@ bool bl24c512_write(uint32_t address, const void *data, size_t length) {
         HAL_StatusTypeDef status =
             HAL_I2C_Mem_Write(&hi2c1, EEPROM_ADDRESS, (uint16_t)address, I2C_MEMADD_SIZE_16BIT,
                               (uint8_t *)bytes, count, EEPROM_TRANSFER_TIMEOUT_MS);
+        if (status != HAL_OK) {
+            bl24c512_diagnostic_t failure =
+                capture_failure(BL24C512_OPERATION_WRITE, address, count, status);
+            publish_failure(&failure);
+        }
         finish_transfer(protected);
-        if (status != HAL_OK || !wait_for_write()) {
+        if (status != HAL_OK || !wait_for_write(address, count)) {
             return false;
         }
         address += count;

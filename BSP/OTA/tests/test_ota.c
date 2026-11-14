@@ -25,6 +25,10 @@ typedef struct {
     bool corrupt_flash_read; // 最后完整摘要读取时破坏返回内容
     bool bad_erase; // 模拟擦除回调虚假成功
     bool fetch_failure; // 模拟服务器正文中断
+    uint32_t fail_fetch_offset; // 指定失败的完整包偏移，零表示禁用
+    unsigned flash_reads; // Flash 已发生读取调用数
+    unsigned fail_flash_read; // 指定失败的 Flash 读取调用，零表示禁用
+    unsigned corrupt_flash_read_event; // 指定返回首字节损坏的 Flash 读取调用，零表示禁用
 } model_t;
 
 static model_t model;
@@ -473,12 +477,16 @@ static bool program_flash(void *context, uint32_t address, const void *data, siz
 /** 功能：读取模拟内部 Flash。参数：模型、地址、输出及长度。返回：读取结果。 */
 static bool read_flash(void *context, uint32_t address, void *data, size_t length) {
     model_t *memory = context;
-    if (memory->dead || address < 0x08000000u || address > 0x08080000u || length > 0x08080000u - address) {
+    ++memory->flash_reads;
+    if (memory->dead || memory->fail_flash_read == memory->flash_reads || address < 0x08000000u || address > 0x08080000u || length > 0x08080000u - address) {
         return false;
     }
     memcpy(data, memory->flash + address - 0x08000000u, length);
     if (memory->corrupt_flash_read && address == OTA_APP_BASE && length > 256) {
         ((uint8_t *)data)[length - 1] ^= 1;
+    }
+    if (memory->corrupt_flash_read_event == memory->flash_reads) {
+        ((uint8_t *)data)[0] ^= 1;
     }
     return true;
 }
@@ -487,7 +495,7 @@ static bool read_flash(void *context, uint32_t address, void *data, size_t lengt
 static bool fetch_package(void *context, uint32_t offset, void *data, size_t length) {
     model_t *memory = context;
     CHECK(length > 0 && length <= 4096 && offset >= 256);
-    if (memory->dead || memory->fetch_failure || offset > memory->package_size || length > memory->package_size - offset) {
+    if (memory->dead || memory->fetch_failure || memory->fail_fetch_offset == offset || offset > memory->package_size || length > memory->package_size - offset) {
         return false;
     }
     memcpy(data, memory->package + offset, length);
@@ -538,8 +546,102 @@ static bool trusted_flash(void) {
     return ota_manifest_parse(model.flash + 0x7FF00, key, true, &manifest) && ota_image_verify(&manifest, model.flash + 0x10000);
 }
 
+/** 功能：核对安装失败对外提供的阶段及定位信息。参数：预期阶段、镜像偏移、Flash 地址和日志结果。返回：无。 */
+static void check_install_diagnostic(ota_install_stage_t stage, uint32_t offset, uint32_t address, ota_store_result_t store_result) {
+    ota_install_diagnostic_t diagnostic = ota_install_diagnostic();
+    CHECK(diagnostic.stage == stage);
+    CHECK(diagnostic.image_offset == offset);
+    CHECK(diagnostic.address == address);
+    CHECK(diagnostic.store_result == store_result);
+}
+
+/** 功能：验证注入故障能定位到真实失败阶段，且下次安装清除上次故障。参数：无。返回：无。 */
+static void test_installer_diagnostics(void) {
+    /** 保存指定 Flash 读取故障及其独立预期位置。 */
+    static const struct {
+        unsigned read; // 从一开始的 Flash 读取调用编号
+        bool corrupt; // 为真时返回损坏字节，否则直接读取失败
+        ota_install_stage_t stage; // 期望对外报告的失败阶段
+        uint32_t offset; // 期望的镜像正文偏移
+        uint32_t address; // 期望的 Flash 绝对地址
+    } cases[] = {
+        {1, false, OTA_INSTALL_STAGE_ERASE_FOOTER_READBACK, 0, 0x0807FF00u},
+        {1, true, OTA_INSTALL_STAGE_ERASE_FOOTER_READBACK, 0, 0x0807FF00u},
+        {2, false, OTA_INSTALL_STAGE_PROGRAM_READBACK, 0, 0x08010000u},
+        {2, true, OTA_INSTALL_STAGE_PROGRAM_READBACK, 0, 0x08010000u},
+        {19, false, OTA_INSTALL_STAGE_PROGRAM_READBACK, 4352, 0x08011100u},
+        {35, false, OTA_INSTALL_STAGE_IMAGE_READ, 0, 0x08010000u},
+        {35, true, OTA_INSTALL_STAGE_IMAGE_VECTOR, 0, 0x08010000u},
+        {36, false, OTA_INSTALL_STAGE_IMAGE_READ, 4096, 0x08011000u},
+        {38, false, OTA_INSTALL_STAGE_FOOTER_PROGRAM_READBACK, 0, 0x0807FF00u},
+        {39, false, OTA_INSTALL_STAGE_FOOTER_COMMIT_READBACK, 0, 0x0807FFFCu},
+        {40, false, OTA_INSTALL_STAGE_FOOTER_READ, 0, 0x0807FF00u},
+        {40, true, OTA_INSTALL_STAGE_FOOTER_PARSE, 0, 0x0807FF00u},
+        {41, false, OTA_INSTALL_STAGE_IMAGE_READ, 0, 0x08010000u},
+        {42, true, OTA_INSTALL_STAGE_IMAGE_HASH, 8193, 0x08012001u}
+    };
+    ota_install_io_t io = install_io();
+    ota_record_t record = {0};
+    uint8_t key[32];
+    size_t index;
+    test_key(key);
+    for (index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        installation_fixture();
+        if (cases[index].corrupt) {
+            model.corrupt_flash_read_event = cases[index].read;
+        } else {
+            model.fail_flash_read = cases[index].read;
+        }
+        CHECK(!ota_install(&io, model.package, key, &record));
+        check_install_diagnostic(cases[index].stage, cases[index].offset, cases[index].address, OTA_STORE_OK);
+    }
+    installation_fixture();
+    model.fail_fetch_offset = 4352;
+    CHECK(!ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_FETCH, 4096, 0x08011000u, OTA_STORE_OK);
+    installation_fixture();
+    model.package[192] ^= 1;
+    CHECK(!ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_AUTHENTICATE, 0, 0, OTA_STORE_OK);
+    CHECK(model.erases == 0 && model.events == 0 && trusted_flash());
+    installation_fixture();
+    model.read_failure = true;
+    CHECK(!ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_PERMIT_JOURNAL, 0, 0, OTA_STORE_IO);
+    CHECK(model.erases == 0 && trusted_flash());
+    installation_fixture();
+    model.package[256 + 4000] ^= 1;
+    CHECK(!ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_IMAGE_HASH, 8193, 0x08012001u, OTA_STORE_OK);
+    installation_fixture();
+    put32(model.package + 260, OTA_APP_BASE + 0x188u);
+    ota_sha256(model.package + 256, 8193, model.package + 64);
+    sign_header(model.package);
+    CHECK(!ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_IMAGE_VECTOR, 0, 0x08010000u, OTA_STORE_OK);
+    installation_fixture();
+    CHECK(ota_install(&io, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_NONE, 0, 0, OTA_STORE_OK);
+    CHECK(!ota_install(NULL, model.package, key, &record));
+    check_install_diagnostic(OTA_INSTALL_STAGE_AUTHENTICATE, 0, 0, OTA_STORE_OK);
+    ++checks;
+}
+
 /** 功能：验证安装顺序、所有副作用边界及完整 Flash 摘要。参数：无。返回：无。 */
 static void test_installer(void) {
+    static const ota_install_stage_t failure_stages[] = {
+        OTA_INSTALL_STAGE_NONE,
+        OTA_INSTALL_STAGE_PERMIT_JOURNAL, OTA_INSTALL_STAGE_PERMIT_JOURNAL,
+        OTA_INSTALL_STAGE_PERMIT_JOURNAL, OTA_INSTALL_STAGE_PERMIT_JOURNAL,
+        OTA_INSTALL_STAGE_PERMIT_JOURNAL, OTA_INSTALL_STAGE_ERASE_FOOTER,
+        OTA_INSTALL_STAGE_ERASE_APPLICATION, OTA_INSTALL_STAGE_ERASE_APPLICATION,
+        OTA_INSTALL_STAGE_ERASE_APPLICATION, OTA_INSTALL_STAGE_PROGRAM,
+        OTA_INSTALL_STAGE_PROGRAM, OTA_INSTALL_STAGE_PROGRAM,
+        OTA_INSTALL_STAGE_FOOTER_PROGRAM, OTA_INSTALL_STAGE_FOOTER_COMMIT,
+        OTA_INSTALL_STAGE_TRIAL_JOURNAL, OTA_INSTALL_STAGE_TRIAL_JOURNAL,
+        OTA_INSTALL_STAGE_TRIAL_JOURNAL, OTA_INSTALL_STAGE_TRIAL_JOURNAL,
+        OTA_INSTALL_STAGE_TRIAL_JOURNAL
+    };
     ota_install_io_t io = install_io();
     ota_record_t record = {0};
     uint8_t key[32];
@@ -556,6 +658,7 @@ static void test_installer(void) {
     CHECK(model.erases == 4 && model.sectors[0] == 7 && model.sectors[1] == 4 && model.sectors[2] == 5 && model.sectors[3] == 6);
     CHECK(model.flash[0x10000 + 8193] == 0xFF);
     total = model.events;
+    CHECK(total + 1 == sizeof(failure_stages) / sizeof(failure_stages[0]));
     for (mode = 0; mode < 3; ++mode) {
         for (event = 1; event <= total; ++event) {
             model = baseline;
@@ -563,6 +666,8 @@ static void test_installer(void) {
             model.fail_event = event;
             model.failure_mode = mode;
             CHECK(!ota_install(&io, model.package, key, &record));
+            CHECK(ota_install_diagnostic().stage == failure_stages[event]);
+            CHECK(ota_install_diagnostic().store_result == ((event <= 5 || event >= 15) ? OTA_STORE_IO : OTA_STORE_OK));
             model.dead = false;
             if (event <= 5) {
                 CHECK(model.erases == 0 && trusted_flash());
@@ -625,6 +730,7 @@ int main(void) {
     test_image();
     test_trusted_metadata();
     test_journal();
+    test_installer_diagnostics();
     test_installer();
     printf("OTA core tests passed: %u groups\n", checks);
     return 0;

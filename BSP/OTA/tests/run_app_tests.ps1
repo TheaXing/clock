@@ -8,10 +8,10 @@ if (-not $vsInstall) { throw 'MSVC C compiler is required.' }
 $devCmd = Join-Path $vsInstall 'Common7/Tools/VsDevCmd.bat'
 $includes = @('BSP/OTA/tests/app_stubs', 'app/ota', 'BSP/OTA', 'app/alarm', 'app', 'BSP/BL24C512', 'BSP/RTC', 'BSP/ESP_AT') | ForEach-Object { '/I"' + (Join-Path $repoRoot $_) + '"' }
 $sources = @('BSP/OTA/tests/test_ota_service.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c', 'BSP/OTA/ota_discovery.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
-$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX {1} {2} /Fo"{3}\\" /Fe"{3}/test_ota_service.exe"' -f $devCmd, ($includes -join ' '), ($sources -join ' '), $testBuild
+$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DOTA_TEST_CRITICAL_HOOK {1} {2} /Fo"{3}\\" /Fe"{3}/test_ota_service.exe"' -f $devCmd, ($includes -join ' '), ($sources -join ' '), $testBuild
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'OTA application compilation failed.' }
-foreach ($scenario in @((1..11) + (13..28) + 30)) {
+foreach ($scenario in @((1..11) + (13..28) + (30..41))) {
     & (Join-Path $testBuild 'test_ota_service.exe') $scenario
     if ($LASTEXITCODE -ne 0) { throw "OTA application scenario $scenario failed." }
 }

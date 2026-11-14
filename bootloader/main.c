@@ -11,6 +11,42 @@ static uint8_t release_key[32];
 static ota_journal_io_t journal;
 static bool trial_start_blocked;
 
+/** 功能：输出无堆依赖的无符号诊断数值；参数：数值和十进制或十六进制选择；返回：无。 */
+static void log_number(uint32_t value, bool hexadecimal) {
+    static const char digits[] = "0123456789ABCDEF";
+    char text[11];
+    char *position = text + sizeof(text) - 1U;
+    uint32_t base = hexadecimal ? 16U : 10U;
+    *position = '\0';
+    do {
+        *--position = digits[value % base];
+        value /= base;
+    } while (value != 0U);
+    boot_platform_log(position);
+}
+
+/** 功能：输出最近安装故障的阶段及位置，不输出包内容或密钥。参数：无。返回：无。 */
+static void log_install_failure(void) {
+    static const char *const stage_names[] = {
+        "none", "authenticate", "permit-journal", "erase-footer", "erase-footer-readback",
+        "erase-application", "fetch", "program", "program-readback", "image-read",
+        "image-vector", "image-hash", "footer-program", "footer-program-readback",
+        "footer-commit", "footer-commit-readback", "footer-read", "footer-parse", "trial-journal"
+    };
+    ota_install_diagnostic_t diagnostic = ota_install_diagnostic();
+    unsigned stage = (unsigned)diagnostic.stage;
+    const char *name = stage < sizeof(stage_names) / sizeof(stage_names[0]) ? stage_names[stage] : "unknown";
+    boot_platform_log("[BOOT] Install failed: stage=");
+    boot_platform_log(name);
+    boot_platform_log(" image_offset=");
+    log_number(diagnostic.image_offset, false);
+    boot_platform_log(" address=0x");
+    log_number(diagnostic.address, true);
+    boot_platform_log(" store=");
+    log_number((uint32_t)diagnostic.store_result, false);
+    boot_platform_log("\r\n");
+}
+
 /** 功能：完整验证内部应用描述及实际镜像；参数：输出描述；返回：可启动为真。 */
 static bool installed_image(ota_manifest_t *manifest) {
     uint8_t footer[256];
@@ -110,6 +146,11 @@ int main(void) {
             boot_target_pin(&target, CLOCK_OTA_PATH, &manifest)) {
             network.path = target.path;
             boot_platform_log("[BOOT] Authenticated package; committing installation permit\r\n");
+            boot_platform_log("[BOOT] Package version=");
+            log_number(manifest.version, false);
+            boot_platform_log(" image_bytes=");
+            log_number(manifest.image_size, false);
+            boot_platform_log("\r\n");
             ota_record_t record;
             memset(&record, 0, sizeof record);
             ota_install_io_t installer = {journal, &network, boot_platform_erase,
@@ -118,6 +159,8 @@ int main(void) {
                 trial_start_blocked = false;
                 boot_platform_log("[BOOT] Installation verified; trial boot\r\n");
                 (void)start_application(false);
+            } else {
+                log_install_failure();
             }
             record_error(2U);
             boot_platform_log("[BOOT] Install incomplete; no unverified App will run\r\n");
