@@ -12,6 +12,7 @@ static int scheduler = taskSCHEDULER_NOT_STARTED;
 static unsigned suspended, read_calls, write_calls, ready_calls;
 static unsigned fail_read_call, ready_failures;
 static bool locked;
+static uint32_t exception_number;
 static uint32_t interrupt_mask;
 static HAL_StatusTypeDef read_status = HAL_OK;
 static HAL_StatusTypeDef write_status = HAL_OK;
@@ -68,7 +69,7 @@ void HAL_Delay(uint32_t milliseconds) {
 
 /** 功能：提供普通任务上下文；参数：无；返回：零。 */
 uint32_t __get_IPSR(void) {
-    return 0U;
+    return exception_number;
 }
 
 /** 功能：读取模拟中断屏蔽位；参数：无；返回：原始屏蔽位。 */
@@ -237,7 +238,14 @@ static void test_recovered_success_keeps_failure(void) {
 
 /** 功能：执行真实驱动故障诊断回归；参数：无；返回：通过返回零。 */
 int main(void) {
+    assert(!bl24c512_transaction_begin());
     assert(bl24c512_transaction_init());
+    assert(bl24c512_transaction_init());
+    exception_number = 1U;
+    assert(!bl24c512_transaction_begin());
+    exception_number = 0U;
+    scheduler = taskSCHEDULER_SUSPENDED;
+    assert(!bl24c512_transaction_begin());
     scheduler = taskSCHEDULER_RUNNING;
     assert(bl24c512_transaction_begin());
     test_success_has_no_failure();

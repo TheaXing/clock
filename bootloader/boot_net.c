@@ -205,7 +205,9 @@ bool boot_net_connect(boot_net_t *net, const boot_net_io_t *io, const char *ssid
     if (!send_text(net, "AT+RST\r\n") || !wait_for(net, "ready", 5000U) ||
         !command(net, "ATE0\r\n", 1000U) ||
         !command(net, "AT+SYSSTORE=0\r\n", 1000U) ||
-        !command(net, "AT+CWMODE=1\r\n", 1000U)) {
+        !command(net, "AT+CWMODE=1,0\r\n", 1000U) ||
+        /* 复位可能恢复旧 NVS 静态地址；与 App 一样临时启用终端 DHCP。 */
+        !command(net, "AT+CWDHCP=1,1\r\n", 1000U)) {
         return false;
     }
     char escaped_ssid[68];

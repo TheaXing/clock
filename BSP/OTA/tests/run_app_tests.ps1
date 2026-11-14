@@ -28,7 +28,7 @@ foreach ($scenario in 1..7) {
     if ($LASTEXITCODE -ne 0) { throw "OTA alarm owner scenario $scenario failed." }
 }
 $webIncludes = @('app/web', 'BSP/ESP_AT', 'BSP/Console') | ForEach-Object { '/I"' + (Join-Path $repoRoot $_) + '"' }
-$webSources = @('BSP/OTA/tests/app_web_test.c', 'app/web/clock_web.c', 'app/web/clock_http.c', 'app/web/web_page.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+$webSources = @('BSP/OTA/tests/app_web_test.c', 'app/web/clock_web.c', 'app/web/clock_http.c', 'app/web/web_page.c', 'app/web/wifi_setup_page.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
 $command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DCLOCK_OTA_ENABLED=1 {1} {2} {3} /Fo"{4}\\" /Fe"{4}/app_web_test.exe" && "{4}/app_web_test.exe"' -f $devCmd, ($includes -join ' '), ($webIncludes -join ' '), ($webSources -join ' '), $testBuild
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'OTA web tests failed.' }

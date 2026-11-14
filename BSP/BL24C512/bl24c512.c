@@ -2,10 +2,8 @@
 #include "i2c.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
 #include "semphr.h"
 static SemaphoreHandle_t transaction_mutex;
-#endif
 static bl24c512_diagnostic_t diagnostic;
 
 /**
@@ -58,7 +56,6 @@ static void publish_failure(const bl24c512_diagnostic_t *failure) {
  * 返回：锁可用返回 true，创建失败或调用时机错误返回 false。
  */
 bool bl24c512_transaction_init(void) {
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
     if (transaction_mutex != NULL) {
         return true;
     }
@@ -67,9 +64,6 @@ bool bl24c512_transaction_init(void) {
     }
     transaction_mutex = xSemaphoreCreateMutex();
     return transaction_mutex != NULL;
-#else
-    return true;
-#endif
 }
 
 /**
@@ -78,15 +72,11 @@ bool bl24c512_transaction_init(void) {
  * 返回：可安全执行完整事务返回 true，否则返回 false。
  */
 bool bl24c512_transaction_begin(void) {
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
     if (transaction_mutex == NULL || __get_IPSR() != 0U ||
         xTaskGetSchedulerState() == taskSCHEDULER_SUSPENDED) {
         return false;
     }
     return xSemaphoreTake(transaction_mutex, portMAX_DELAY) == pdTRUE;
-#else
-    return xTaskGetSchedulerState() != taskSCHEDULER_SUSPENDED;
-#endif
 }
 
 /**
@@ -95,9 +85,7 @@ bool bl24c512_transaction_begin(void) {
  * 返回：无。
  */
 void bl24c512_transaction_end(void) {
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
     (void)xSemaphoreGive(transaction_mutex);
-#endif
 }
 
 #define EEPROM_ADDRESS ((uint16_t)(0x50U << 1))

@@ -66,9 +66,9 @@ add_executable(Clock_Bootloader
     bootloader/startup.s bootloader/main.c bootloader/boot_platform.c
     bootloader/boot_net.c bootloader/boot_uart.c bootloader/boot_policy.c bootloader/boot_target.c
     Core/Src/system_stm32f4xx.c ${BOOT_HAL} ${OTA_COMMON}
-    BSP/OTA/ota_installer.c BSP/OTA/ota_http.c)
+    BSP/OTA/ota_installer.c BSP/OTA/ota_http.c BSP/WiFi/wifi_store.c)
 target_link_libraries(Clock_Bootloader PRIVATE stm32cubemx)
-target_include_directories(Clock_Bootloader PRIVATE BSP/OTA app bootloader)
+target_include_directories(Clock_Bootloader PRIVATE BSP/OTA BSP/WiFi app bootloader)
 target_compile_options(Clock_Bootloader PRIVATE -Os -Wall -Wextra -Werror)
 target_compile_definitions(Clock_Bootloader PRIVATE CLOCK_OTA_ENABLED=1 CLOCK_OTA_CONFIG_HEADER="${OTA_CONFIG_INCLUDE}")
 if(EXISTS "${CMAKE_SOURCE_DIR}/app/clock_config_local.h")

@@ -1,6 +1,7 @@
 #include "clock_web.h"
 #include "clock_http.h"
 #include "web_page.h"
+#include "wifi_setup_page.h"
 #include "alarm_service.h"
 #include "alarm_engine.h"
 #include "esp_at.h"
@@ -40,6 +41,10 @@ static char json[2304] WEB_WORK_RAM;
 static uint32_t session_token, last_attempt;
 static bool network_connected, attempted;
 static void (*background_poll)(void);
+static int (*wifi_submit)(const char *, uint32_t);
+static void (*wifi_status)(char *, size_t, uint32_t);
+static uint32_t setup_session;
+static bool setup_enabled;
 _Static_assert(sizeof(clock_http_parser_t) <= 768U, "HTTP parser RAM budget exceeded");
 
 /**
@@ -354,11 +359,58 @@ static void post_ota(unsigned link, const clock_http_parser_t *request) {
 }
 
 /**
- * 功能：根据完整 HTTP 请求的方法和目标选择页面或闹钟接口处理。
+ * 功能：仅分派配网页、状态和提交接口，隔离普通管理路由。
  * 参数：link，已完成请求解析的连接编号。
  * 返回：无。
  */
+static void dispatch_setup(unsigned link) {
+    clock_http_parser_t *request = &clients[link].parser;
+    if (request->method == CLOCK_HTTP_GET &&
+        (strcmp(request->target, "/") == 0 || strcmp(request->target, "/setup") == 0)) {
+        respond(link, "200 OK", "text/html; charset=utf-8", wifi_setup_page,
+                wifi_setup_page_length);
+    } else if (request->method == CLOCK_HTTP_GET && strcmp(request->target, "/api/wifi/status") == 0) {
+        if (!wifi_status || !setup_session) {
+            error_response(link, "503 Service Unavailable", "wifi_unavailable");
+            return;
+        }
+        json[0] = '\0';
+        wifi_status(json, sizeof json, setup_session);
+        json[sizeof json - 1U] = '\0';
+        respond(link, "200 OK", "application/json; charset=utf-8", json, strlen(json));
+    } else if (request->method == CLOCK_HTTP_POST && strcmp(request->target, "/api/wifi/config") == 0) {
+        if (!request->has_clock_request) {
+            error_response(link, "403 Forbidden", "request_header_required");
+            return;
+        }
+        if (!request->form_content_type) {
+            error_response(link, "415 Unsupported Media Type", "form_required");
+            return;
+        }
+        int status = wifi_submit && setup_session ? wifi_submit(request->body, setup_session) : 503;
+        if (status == 202) {
+            const char body[] = "{\"state\":\"connecting\"}";
+            respond(link, "202 Accepted", "application/json; charset=utf-8", body, sizeof body - 1U);
+        } else if (status == 400) {
+            error_response(link, "400 Bad Request", "invalid_fields");
+        } else if (status == 403) {
+            error_response(link, "403 Forbidden", "session_changed");
+        } else if (status == 409) {
+            error_response(link, "409 Conflict", "wifi_busy");
+        } else {
+            error_response(link, "503 Service Unavailable", "wifi_unavailable");
+        }
+    } else {
+        error_response(link, "404 Not Found", "not_found");
+    }
+}
+
+/** 功能：根据当前模式选择互斥的配网或普通网页路由；参数：link，连接编号；返回：无。 */
 static void dispatch(unsigned link) {
+    if (setup_enabled) {
+        dispatch_setup(link);
+        return;
+    }
     clock_http_parser_t *request = &clients[link].parser;
     if (request->method == CLOCK_HTTP_GET) {
         if (strcmp(request->target, "/") == 0 || strcmp(request->target, "/index.html") == 0) {
@@ -398,6 +450,10 @@ void clock_web_init(uint32_t session) {
     attempted = false;
     last_attempt = 0U;
     background_poll = NULL;
+    wifi_submit = NULL;
+    wifi_status = NULL;
+    setup_session = 0U;
+    setup_enabled = false;
 }
 /**
  * 功能：设置分段响应之间执行的同一网络任务后台维护回调。
@@ -408,13 +464,37 @@ void clock_web_set_background_poll(void (*poll)(void)) {
     background_poll = poll;
 }
 
+/** 功能：登记由网络任务执行的配网回调；参数：submit，只排队且返回 HTTP 状态；status，生成不含密码的有界 JSON；返回：无。 */
+void clock_web_set_wifi_handlers(int (*submit)(const char *, uint32_t),
+                                 void (*status)(char *, size_t, uint32_t)) {
+    wifi_submit = submit;
+    wifi_status = status;
+}
+
+/** 功能：切换互斥配网路由并保留普通会话；参数：enabled，是否启用；session，非零配网会话；返回：无。 */
+void clock_web_setup(bool enabled, uint32_t session) {
+    if (!enabled) {
+        session = 0U;
+    }
+    if (setup_enabled != enabled || setup_session != session) {
+        for (unsigned i = 0U; i < WEB_LINKS; ++i) {
+            if (clients[i].active) {
+                (void)esp_at_server_close((uint8_t)i, clients[i].generation);
+            }
+        }
+        memset(clients, 0, sizeof clients);
+    }
+    setup_enabled = enabled;
+    setup_session = enabled ? session : 0U;
+}
+
 /**
  * 功能：跟踪网络状态，在连接可用时按重试间隔启动 HTTP 服务。
- * 参数：connected，Wi-Fi 连接状态；now_ms，当前单调毫秒时间。
+ * 参数：connected，本地 AP 或 STA 的 HTTP 传输是否可用；now_ms，当前单调毫秒时间。
  * 返回：无。
  */
 void clock_web_network(bool connected, uint32_t now_ms) {
-    if (session_token == 0U) {
+    if ((setup_enabled ? setup_session : session_token) == 0U) {
         return;
     }
     if (!connected) {

@@ -443,14 +443,12 @@ static void save_worker(void *argument) {
     for (;;) {
         if (xQueueReceive(save_queue, &job, portMAX_DELAY) == pdTRUE) {
             memset(&result, 0, sizeof result);
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
             if (!bl24c512_transaction_begin()) {
                 result.result = ALARM_STORE_IO_ERROR;
                 result.generation = store.generation;
                 (void)xQueueSend(result_queue, &result, portMAX_DELAY);
                 continue;
             }
-#endif
             /* 启动读取失败可能使内存保留默认值或旧槽位配置。应在新近验证的持久化快照上
              * 仅合并用户编辑的条目；未读槽位可能包含更新代数。 */
             result.result = alarm_store_load_for_update(&store, &result.config);
@@ -470,9 +468,7 @@ static void save_worker(void *argument) {
                 }
             }
             result.generation = store.generation;
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
             bl24c512_transaction_end();
-#endif
             /* 同一时刻只有一个未完成任务，因此结果队列始终有可用位置。 */
             (void)xQueueSend(result_queue, &result, portMAX_DELAY);
         }
@@ -925,16 +921,12 @@ void alarm_service_init(void) {
     board_keys_init();
     alarm_config_defaults(&config);
     alarm_store_init(&store, io);
-#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
     if (bl24c512_transaction_begin()) {
         loaded = alarm_store_load(&store, &config);
         bl24c512_transaction_end();
     } else {
         loaded = ALARM_STORE_IO_ERROR;
     }
-#else
-    loaded = alarm_store_load(&store, &config);
-#endif
     owner.storage_ok = loaded == ALARM_STORE_OK;
     if (!owner.storage_ok) {
         alarm_config_defaults(&config);

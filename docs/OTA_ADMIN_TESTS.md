@@ -8,7 +8,7 @@
 2. 检查 `app/clock_config_local.h` 中的 Wi-Fi 配置。在项目根目录初始化一次：
 
 ```powershell
-node tools/ota/ota.mjs init --config app/ota_config_local.h --key-file app/ota_key_local.json --host 192.168.1.10 --port 8788 --path /firmware.ota --version 1
+node tools/ota/ota.mjs init --config app/ota_config_local.h --key-file app/ota_key_local.json --host 192.168.100.144 --port 8788 --path /firmware.ota --version 1
 ```
 
 已有配置时不要重新初始化。私下备份配置头和密钥 JSON，后续编译、后台与已装 Bootloader 必须使用同一发布密钥。`adminTokenHex` 用于管理网页登录，`keyHex` 用于签名，两者不可互换。不要上传或提交这两份文件。

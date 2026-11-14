@@ -80,7 +80,11 @@ TickType_t xTaskGetTickCount(void) {
 void vTaskDelayUntil(TickType_t *previous, TickType_t increment) {
     *previous += increment;
     tick = *previous;
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
     assert(owner_pulses > 0U);
+#else
+    assert(owner_pulses == 0U);
+#endif
     longjmp(stopped, 1);
 }
 

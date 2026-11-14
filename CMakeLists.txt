@@ -58,6 +58,10 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     app/workqueue.c
     app/app.c
     app/wifi.c
+    app/wifi_identity.c
+    BSP/WiFi/wifi_store.c
+    BSP/QRCode/clock_qr.c
+    BSP/QRCode/qrcodegen.c
     app/weather.c
     app/ui.c
     app/alarm/alarm_engine.c
@@ -69,6 +73,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     app/web/clock_web.c
     app/web/web_page.c
     app/web/web_session.c
+    app/web/wifi_form.c
+    app/web/wifi_setup_page.c
     app/onenet/onenet_service.c
     app/onenet/onenet_model.c
     app/onenet/onenet_ca.c
@@ -131,6 +137,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     BSP/Buzzer
     BSP/Keys
     BSP/BL24C512
+    BSP/WiFi
+    BSP/QRCode
     BSP/AHT20
     BSP/RTC
     BSP/Console

@@ -37,13 +37,30 @@ typedef struct {
 static main_values_t latest;
 static bool main_redraw_requested;
 static bool cloud_time_ready;
+static bool display_mode_setup;
 /**
  * 功能：轮询 OneNET 服务，供网页事务等待期间处理云端通信。
  * 参数：无。
  * 返回：无。
  */
 static void network_background(void) {
-    onenet_service_poll((uint32_t)xTaskGetTickCount());
+    if (!wifi_setup_active()) {
+        onenet_service_poll((uint32_t)xTaskGetTickCount());
+    }
+}
+
+/** 功能：在显示锁内拒绝覆盖配网页面。参数：无。返回：允许绘制普通内容为真。 */
+static bool main_display_begin(void) {
+    if (!alarm_service_display_begin()) {
+        return false;
+    }
+    wifi_view_t view;
+    wifi_get_view(&view);
+    if (view.active || display_mode_setup) {
+        alarm_service_display_end();
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -101,7 +118,7 @@ static void publish_indoor(float temperature, float humidity) {
     latest.humidity = humidity;
     latest.indoor_valid = true;
     taskEXIT_CRITICAL();
-    if (alarm_service_display_begin()) {
+    if (main_display_begin()) {
         main_page_redraw_inner_temperature(temperature);
         main_page_redraw_inner_humidity(humidity);
         alarm_service_display_end();
@@ -119,7 +136,7 @@ static void publish_ssid(const char *ssid) {
     latest.ssid[sizeof(latest.ssid) - 1] = '\0';
     latest.ssid_valid = true;
     taskEXIT_CRITICAL();
-    if (alarm_service_display_begin()) {
+    if (main_display_begin()) {
         main_page_redraw_wifi_ssid(ssid);
         alarm_service_display_end();
     }
@@ -173,6 +190,7 @@ static void clock_loop(void *unused) {
     (void)unused;
     TickType_t wake = xTaskGetTickCount();
     uint32_t seconds = 0;
+    uint32_t rendered_generation = UINT32_MAX;
     for (;;) {
         rtc_date_time_t date = {0};
         rtc_get_time(&date);
@@ -182,7 +200,16 @@ static void clock_loop(void *unused) {
             redraw = main_redraw_requested;
             main_redraw_requested = false;
             taskEXIT_CRITICAL();
-            if (redraw) {
+            wifi_view_t view;
+            wifi_get_view(&view);
+            if (view.active) {
+                if (redraw || !display_mode_setup || rendered_generation != view.generation) {
+                    wifi_setup_page_display(&view);
+                    rendered_generation = view.generation;
+                }
+                display_mode_setup = true;
+            } else if (redraw || display_mode_setup) {
+                display_mode_setup = false;
                 restore_main(&date);
             } else if (date.year >= 2020 && date.year <= 2099) {
                 main_page_redraw_time(&date);
@@ -300,7 +327,7 @@ static void update_weather(void) {
     latest.weather = weather;
     latest.weather_valid = true;
     taskEXIT_CRITICAL();
-    if (alarm_service_display_begin()) {
+    if (main_display_begin()) {
         main_page_redraw_outdoor_city(weather.city);
         main_page_redraw_outdoor_temperature(weather.temperature);
         main_page_redraw_outdoor_weather_icon(weather.weather_code);
@@ -339,17 +366,15 @@ static void network_loop(void *unused) {
             if (!wifi_ready()) {
                 (void)wifi_init();
             }
-            bool queried = wifi_ready() && esp_at_get_wifi_info(&info);
-            connected = queried && info.connected;
-            if (queried) {
+            bool normal_network = wifi_ready() && !wifi_setup_active();
+            bool joined = normal_network && wifi_wait_connect();
+            bool queried = wifi_ready() && !wifi_setup_active() && esp_at_get_wifi_info(&info);
+            connected = joined && queried && info.connected;
+            if (queried || wifi_setup_active()) {
                 query_failures = 0;
             } else if (++query_failures >= 3) {
                 wifi_mark_unready();
                 query_failures = 0;
-            }
-            if (!connected && wifi_ready()) {
-                (void)wifi_wait_connect();
-                connected = esp_at_get_wifi_info(&info) && info.connected;
             }
             if (connected) {
                 if (!was_connected || strcmp(last_ssid, info.ssid) != 0) {
@@ -373,13 +398,33 @@ static void network_loop(void *unused) {
             last_wifi = xTaskGetTickCount();
         }
         now = xTaskGetTickCount();
-        clock_web_network(connected, (uint32_t)now);
+        bool setup_before_poll = wifi_setup_active();
+        /* HTTP 上一轮已完整应答并关闭，候选联网只能在此安全边界开始。 */
+        wifi_poll((uint32_t)now);
+        if (setup_before_poll && !wifi_setup_active()) {
+            connected = false;
+            last_wifi = xTaskGetTickCount() - pdMS_TO_TICKS(CLOCK_WIFI_INTERVAL_MS);
+        }
+        bool setup = wifi_setup_active();
+        if (setup) {
+            connected = false;
+            synced = false;
+            cloud_time_ready = false;
+        }
+        clock_web_network(setup ? wifi_setup_available() : connected, (uint32_t)xTaskGetTickCount());
         clock_web_poll((uint32_t)xTaskGetTickCount());
 #if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
         /* 网页处理函数已发送完响应并关闭连接；此处是唯一允许复位的网络边界。 */
         ota_service_network_poll((uint32_t)xTaskGetTickCount());
-        ota_service_autocheck_poll(connected, (uint32_t)xTaskGetTickCount());
+        if (!setup) {
+            ota_service_autocheck_poll(connected, (uint32_t)xTaskGetTickCount());
+        }
 #endif
+        if (setup) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        now = xTaskGetTickCount();
         if (connected &&
             elapsed(now, last_sync, synced ? CLOCK_SYNC_INTERVAL_MS : CLOCK_SYNC_RETRY_MS)) {
             synced = synchronize();
@@ -408,6 +453,7 @@ static void network_loop(void *unused) {
  */
 void app_init(void) {
     clock_web_set_background_poll(network_background);
+    clock_web_set_wifi_handlers(wifi_setup_submit, wifi_setup_status);
     BaseType_t created = xTaskCreate(clock_loop, "clock", 1024, NULL, 4, &clock_task);
     configASSERT(created == pdPASS);
     created = xTaskCreate(sensor_loop, "sensor", 1024, NULL, 3, &sensor_task);

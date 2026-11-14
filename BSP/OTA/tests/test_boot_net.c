@@ -74,6 +74,10 @@ typedef struct {
     bool payload_timeout_fired; // 是否已经触发正文超时且留下迟到数据
     bool fail_close_transport; // 关闭命令开始时模拟底层锁存故障
     bool transport_failed; // 本轮底层传输已失效
+    bool sta_dhcp_enabled; // 当前终端接口是否使用 DHCP，复位时恢复旧静态配置
+    bool store_disabled; // 当前命令是否已禁止写入模块 NVS
+    bool reject_dhcp; // 是否模拟 DHCP 初始化被拒绝
+    unsigned join_commands; // 实际发出的网络加入命令数
 } fixture_t;
 
 /** 功能：追加精确UART字节；参数：夹具和字节；返回：无。 */
@@ -124,6 +128,9 @@ static bool send_bytes(void *context, const void *data, size_t n) {
     assert(n < sizeof cmd);
     memcpy(cmd, raw, n);
     cmd[n] = '\0';
+    if (strncmp(cmd, "AT+CWMODE=", 10U) == 0) {
+        assert(strcmp(cmd, "AT+CWMODE=1,0\r\n") == 0);
+    }
     if (strncmp(cmd, "GET ", 4) == 0) {
         const char *range = strstr(cmd, "Range: bytes=");
         assert(range != NULL);
@@ -261,8 +268,31 @@ static bool send_bytes(void *context, const void *data, size_t n) {
             queue(f, line, sizeof line);
             queue(f, "\r\nOK\r\n", 6U);
         }
+    } else if (strcmp(cmd, "AT+SYSSTORE=0\r\n") == 0) {
+        f->store_disabled = true;
+        queue(f, "\r\nOK\r\n", 6U);
+    } else if (strcmp(cmd, "AT+CWDHCP=1,1\r\n") == 0) {
+        assert(f->store_disabled);
+        if (f->reject_dhcp) {
+            queue(f, "\r\nERROR\r\n", 9U);
+        } else {
+            f->sta_dhcp_enabled = true;
+            queue(f, "\r\nOK\r\n", 6U);
+        }
+    } else if (strncmp(cmd, "AT+CWJAP=", 9U) == 0) {
+        ++f->join_commands;
+        queue(f, "\r\nOK\r\n", 6U);
+    } else if (strncmp(cmd, "AT+CIPSTART=", 12U) == 0) {
+        if (f->sta_dhcp_enabled) {
+            queue(f, "\r\nOK\r\n", 6U);
+        } else {
+            /* 旧静态子网无法用于新路由器；只有重新启用 DHCP 才能完成联网。 */
+            queue(f, "\r\nERROR\r\n", 9U);
+        }
     } else if (strncmp(cmd, "AT+RST", 6) == 0) {
         ++f->reset_commands;
+        f->sta_dhcp_enabled = false;
+        f->store_disabled = false;
         queue(f, "\r\nOK\r\nready\r\n", 13);
     } else {
         queue(f, "\r\nOK\r\n", 6);
@@ -315,6 +345,25 @@ static void delay(void *context, uint32_t ms) {
 /** 功能：提供底层故障锁存状态；参数：夹具；返回：本轮无故障为真。 */
 static bool healthy(void *context) {
     return !((fixture_t *)context)->transport_failed;
+}
+
+/** 功能：验证复位恢复旧静态配置后重新启用 DHCP，初始化失败时不继续加入；参数：无；返回：无。 */
+static void test_dhcp_after_legacy_static_config(void) {
+    for (unsigned rejected = 0U; rejected < 2U; ++rejected) {
+        fixture_t f = {0};
+        /* App 运行期使用 DHCP，但 SYSSTORE=0 不会修改旧的静态配置。 */
+        f.sta_dhcp_enabled = true;
+        f.reject_dhcp = rejected != 0U;
+        boot_net_t net;
+        boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};
+        assert(boot_net_connect(&net, &io, "saved-router", "password", "192.168.1.10",
+                                8788U, "/firmware.ota") == (rejected == 0U));
+        assert(f.join_commands == (rejected == 0U ? 1U : 0U));
+        if (rejected == 0U) {
+            uint8_t manifest[256];
+            assert(boot_net_manifest(&net, manifest));
+        }
+    }
 }
 
 /** 功能：复现数据窗口结束后填充污染命令行并验证恢复；参数：无；返回：无。 */
@@ -704,6 +753,7 @@ static void test_partial_payload_is_not_recorded(void) {
 
 /** 功能：运行真实下载器和二进制/身份测试；参数：无；返回：成功为零。 */
 int main(void) {
+    test_dhcp_after_legacy_static_config();
     fixture_t f = {0};
     boot_net_t net;
     boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};

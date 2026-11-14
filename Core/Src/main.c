@@ -31,6 +31,7 @@
 #include "clock_console.h"
 #include "clock_rtc.h"
 #include "i2c.h"
+#include "bl24c512.h"
 #include "app.h"
 #include "ui.h"
 #include "wifi.h"
@@ -193,6 +194,10 @@ int main(void) {
     MX_SPI2_Init();
 
     /* USER CODE BEGIN 2 */
+    /* 所有固件均在调度器启动前创建全设备 EEPROM 事务锁。 */
+    if (!bl24c512_transaction_init()) {
+        Error_Handler();
+    }
     MX_USART2_UART_Init();
     MX_I2C2_Init();
     MX_I2C1_Init();

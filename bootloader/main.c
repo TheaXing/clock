@@ -5,12 +5,14 @@
 #include "ota_config.h"
 #include "ota_image.h"
 #include "clock_config.h"
+#include "wifi_store.h"
 #include <string.h>
 
 static boot_net_t network;
 static uint8_t release_key[32];
 static ota_journal_io_t journal;
 static bool trial_start_blocked;
+static wifi_credentials_t wifi_credentials;
 
 /** 功能：输出无堆依赖的无符号诊断数值；参数：数值和十进制或十六进制选择；返回：无。 */
 static void log_number(uint32_t value, bool hexadecimal) {
@@ -86,7 +88,7 @@ static void log_install_failure(void) {
     boot_platform_log("\r\n");
     if (diagnostic.stage == OTA_INSTALL_STAGE_FETCH) {
         boot_platform_log("[BOOT] Fetch response: received=");
-        log_number(network.http.received, false);
+        log_number((uint32_t)network.http.received, false);
         boot_platform_log(" expected=");
         log_number(network.http.length, false);
         boot_platform_log(" complete=");
@@ -179,6 +181,14 @@ int main(void) {
     }
     boot_platform_log("\r\n[BOOT] Clock single-slot OTA v1\r\n");
     journal = boot_platform_journal_io();
+    /* Boot 与 App 共享字节格式；无可用记录时兼容编译默认凭据。 */
+    wifi_store_io_t wifi_io = {journal.read, journal.write, journal.context};
+    const char *wifi_ssid = CLOCK_WIFI_SSID;
+    const char *wifi_password = CLOCK_WIFI_PASSWORD;
+    if (wifi_store_load(&wifi_io, &wifi_credentials) == WIFI_STORE_OK) {
+        wifi_ssid = wifi_credentials.ssid;
+        wifi_password = wifi_credentials.password;
+    }
     bool forced = boot_platform_key();
     if (!ota_config_decode_hex(CLOCK_OTA_KEY_HEX, release_key)) {
         boot_platform_log("[BOOT] Release key invalid; recovery blocked\r\n");
@@ -203,7 +213,7 @@ int main(void) {
         bool current_valid = installed_image(&current);
         bool ready = boot_target_select(status, &saved, current_valid ? &current : NULL,
                                          release_key, forced, CLOCK_OTA_PATH, &target) &&
-            boot_net_connect(&network, &net_io, CLOCK_WIFI_SSID, CLOCK_WIFI_PASSWORD,
+            boot_net_connect(&network, &net_io, wifi_ssid, wifi_password,
                              CLOCK_OTA_HOST, (uint16_t)CLOCK_OTA_PORT, target.path);
         if (ready && boot_net_manifest(&network, header) &&
             ota_manifest_parse(header, release_key, false, &manifest) &&

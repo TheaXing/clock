@@ -32,7 +32,7 @@ void bl24c512_get_diagnostic(bl24c512_diagnostic_t *out);
 bool bl24c512_transaction_init(void);
 bool bl24c512_transaction_begin(void);
 void bl24c512_transaction_end(void);
-/* OTA 构建由事务锁保护完整业务操作。每次 HAL 调用只暂停任务调度，保留中断，
+/* 所有构建均由事务锁保护完整业务操作。每次 HAL 调用只暂停任务调度，保留中断，
  * 并在结束后恢复；分块之间及等待写应答时让出处理器。 */
 bool bl24c512_read(uint32_t address, void *data, size_t length);
 bool bl24c512_write(uint32_t address, const void *data, size_t length);

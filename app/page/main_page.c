@@ -25,7 +25,7 @@ void main_page_display(void) {
         // 无线网络图标
         ui_draw_image(23, 20, &icon_wifi);
         // 无线网络名称
-        main_page_redraw_wifi_ssid(WIFI_SSID);
+        main_page_redraw_wifi_ssid("connecting");
 
         //时间
         main_page_redraw_time(NULL);

@@ -84,6 +84,8 @@ static uint32_t passive_remaining;
 static uint16_t passive_limit, passive_length, passive_stored;
 static uint8_t passive_data[ESP_SERVER_CHUNK_CAPACITY];
 static volatile bool server_ready;
+static volatile bool setup_enabled;
+static volatile bool server_created;
 static server_link_t server_links[ESP_SERVER_LINKS];
 static uint8_t poll_cursor;
 static uint16_t send_debt;
@@ -158,6 +160,8 @@ static void invalidate_server(void) {
  */
 static void transport_fault(void) {
     synchronized = false;
+    setup_enabled = false;
+    server_created = false;
     invalidate_server();
     mqtt_invalidate();
     if (mqtt_error != ESP_MQTT_ERROR_QUEUE_OVERFLOW) {
@@ -464,7 +468,9 @@ static bool unsolicited_line(size_t length, BaseType_t *woken) {
         return true;
     }
     if (length == 15U && memcmp(line, "WIFI DISCONNECT", 15U) == 0) {
-        invalidate_server();
+        if (!setup_enabled) {
+            invalidate_server();
+        }
         mqtt_invalidate();
         mqtt_error = ESP_MQTT_ERROR_DISCONNECTED;
         return true;
@@ -1042,7 +1048,22 @@ bool esp_at_wifi_init(void) {
     if (!lock_commands()) {
         return false;
     }
-    bool ok = command_locked("AT+CWMODE=1\r\n", 2000U, false);
+    taskENTER_CRITICAL();
+    setup_enabled = false;
+    invalidate_server();
+    taskEXIT_CRITICAL();
+    bool automatic = false;
+    bool ok = command_locked("AT+SYSSTORE=0\r\n", 2000U, false) &&
+              command_locked("AT+CWAUTOCONN?\r\n", 2000U, false) &&
+              esp_at_parse_autoconnect(response, &automatic);
+    /* 自动连接开关始终写入模块 NVS；只在仍开启时改写一次，避免每次初始化重复擦写。 */
+    if (ok && automatic) {
+        ok = command_locked("AT+CWAUTOCONN=0\r\n", 2000U, false);
+    }
+    ok = ok && command_locked("AT+CWMODE=1,0\r\n", 2000U, false) &&
+         command_locked("AT+CWRECONNCFG=0,0\r\n", 2000U, false) &&
+         command_locked("AT+CWQAP\r\n", 2000U, false) &&
+         command_locked("AT+CWDHCP=1,1\r\n", 2000U, false);
     unlock_commands();
     return ok;
 }
@@ -1055,20 +1076,133 @@ bool esp_at_wifi_init(void) {
 bool esp_at_connect_wifi(const char *ssid, const char *pwd, const char *mac) {
     char escaped_ssid[65], escaped_pwd[129];
     if (!esp_at_quote(ssid, 32U, escaped_ssid, sizeof escaped_ssid) || escaped_ssid[0] == '\0' ||
-        !esp_at_quote(pwd, 64U, escaped_pwd, sizeof escaped_pwd) ||
+        !esp_at_quote(pwd, 63U, escaped_pwd, sizeof escaped_pwd) ||
         (mac != NULL && !esp_at_valid_mac(mac)) || !lock_commands()) {
         return false;
     }
     int count;
     if (mac != NULL) {
-        count = snprintf(command_buffer, sizeof command_buffer, "AT+CWJAP=\"%s\",\"%s\",\"%s\"\r\n",
+        count = snprintf(command_buffer, sizeof command_buffer, "AT+CWJAP=\"%s\",\"%s\",\"%s\",0,0,3,0,15\r\n",
                          escaped_ssid, escaped_pwd, mac);
     } else {
-        count = snprintf(command_buffer, sizeof command_buffer, "AT+CWJAP=\"%s\",\"%s\"\r\n",
+        count = snprintf(command_buffer, sizeof command_buffer, "AT+CWJAP=\"%s\",\"%s\",,0,0,3,0,15\r\n",
                          escaped_ssid, escaped_pwd);
     }
     bool ok = count > 0 && (size_t)count < sizeof command_buffer &&
-              command_locked(command_buffer, 20000U, false);
+              exchange_locked(command_buffer, 20000U, false, false) == ACK_OK;
+    unlock_commands();
+    return ok;
+}
+
+/** 功能：关闭旧网页请求及套接字后断开终端关联，保留临时热点；参数：无；返回：成功为真，失败需重新初始化。 */
+bool esp_at_disconnect_wifi(void) {
+    if (!lock_commands()) {
+        taskENTER_CRITICAL();
+        transport_fault();
+        taskEXIT_CRITICAL();
+        return false;
+    }
+    taskENTER_CRITICAL();
+    invalidate_server();
+    taskEXIT_CRITICAL();
+    bool ok = !server_created || command_locked("AT+CIPSERVER=0,1\r\n", 2000U, false);
+    server_created = false;
+    ok = ok && command_locked("AT+CWQAP\r\n", 2000U, false);
+    taskENTER_CRITICAL();
+    /* 防止关闭应答期间迟到的连接通知继续携带旧的网页请求；调用方同时清空 HTTP 解析器。 */
+    invalidate_server();
+    mqtt_invalidate();
+    if (!ok) {
+        transport_fault();
+    }
+    taskEXIT_CRITICAL();
+    unlock_commands();
+    return ok;
+}
+
+/** 功能：启用固定地址的临时 WPA2 热点和终端 DHCP；参数：热点名称、口令；返回：配置及地址核验成功为真。 */
+bool esp_at_setup_start(const char *ssid, const char *password) {
+    char escaped_ssid[65], escaped_password[127], ip[16];
+    if (!esp_at_quote(ssid, 32U, escaped_ssid, sizeof escaped_ssid) || escaped_ssid[0] == '\0' ||
+        !esp_at_quote(password, 63U, escaped_password, sizeof escaped_password) ||
+        strlen(password) < 8U) {
+        return false;
+    }
+    for (const unsigned char *p = (const unsigned char *)password; *p != 0U; ++p) {
+        if (*p < 32U || *p > 126U) {
+            return false;
+        }
+    }
+    if (!lock_commands()) {
+        return false;
+    }
+    taskENTER_CRITICAL();
+    setup_enabled = false;
+    invalidate_server();
+    taskEXIT_CRITICAL();
+    bool ok = !server_created || command_locked("AT+CIPSERVER=0,1\r\n", 2000U, false);
+    server_created = false;
+    ok = ok && command_locked("AT+SYSSTORE=0\r\n", 2000U, false) &&
+         command_locked("AT+CWQAP\r\n", 2000U, false) &&
+         command_locked("AT+CWMODE=3,0\r\n", 2000U, false);
+    int count = snprintf(command_buffer, sizeof command_buffer, "AT+CWSAP=\"%s\",\"%s\",6,3,4,0\r\n",
+                         escaped_ssid, escaped_password);
+    ok = ok && count > 0 && (size_t)count <= ESP_HTTP_COMMAND_MAX &&
+         command_locked(command_buffer, 2000U, false) &&
+         command_locked("AT+CWDHCP=0,2\r\n", 2000U, false) &&
+         command_locked("AT+CIPAP=\"192.168.4.1\",\"192.168.4.1\",\"255.255.255.0\"\r\n", 2000U, false) &&
+         command_locked("AT+CWDHCP=1,3\r\n", 2000U, false) &&
+         command_locked("AT+CWDHCPS=1,120,\"192.168.4.2\",\"192.168.4.20\"\r\n", 2000U, false) &&
+         command_locked("AT+CIFSR\r\n", 2000U, false) &&
+         esp_at_parse_ap_ip(response, ip) && strcmp(ip, "192.168.4.1") == 0;
+    taskENTER_CRITICAL();
+    setup_enabled = ok && synchronized;
+    ok = setup_enabled;
+    if (!ok) {
+        transport_fault();
+    }
+    taskEXIT_CRITICAL();
+    unlock_commands();
+    return ok;
+}
+
+/** 功能：关闭服务器及所有旧连接后切换终端模式；参数：无；返回：全部关闭成功为真，失败需重新初始化。 */
+bool esp_at_setup_stop(void) {
+    if (!lock_commands()) {
+        return false;
+    }
+    taskENTER_CRITICAL();
+    setup_enabled = false;
+    invalidate_server();
+    taskEXIT_CRITICAL();
+    bool ok = command_locked("AT+CIPSERVER=0,1\r\n", 2000U, false) &&
+              command_locked("AT+CWMODE=1,0\r\n", 2000U, false);
+    taskENTER_CRITICAL();
+    invalidate_server();
+    server_created = false;
+    if (!ok) {
+        transport_fault();
+    }
+    taskEXIT_CRITICAL();
+    unlock_commands();
+    return ok;
+}
+
+/** 功能：查询取得热点 DHCP 租约的客户端；参数：连接结果输出；返回：查询有效为真，失败时结果为假。 */
+bool esp_at_setup_has_client(bool *connected) {
+    if (connected == NULL) {
+        return false;
+    }
+    *connected = false;
+    if (!setup_enabled || !lock_commands()) {
+        return false;
+    }
+    bool parsed = false;
+    bool ok = setup_enabled && command_locked("AT+CWLIF\r\n", 2000U, false) &&
+              esp_at_parse_setup_clients(response, &parsed) && setup_enabled && synchronized;
+    if (ok) {
+        *connected = parsed;
+    }
     unlock_commands();
     return ok;
 }
@@ -1710,9 +1844,11 @@ bool esp_at_server_start(uint16_t port, char ip[16]) {
     if (ok) {
         (void)snprintf(command_buffer, sizeof command_buffer, "AT+CIPSERVER=1,%u\r\n",
                        (unsigned)port);
-        ok = command_locked(command_buffer, 2000U, false) &&
-             command_locked("AT+CIPSTO=60\r\n", 2000U, false) &&
-             command_locked("AT+CIFSR\r\n", 2000U, false) && esp_at_parse_station_ip(response, ip);
+        ok = command_locked(command_buffer, 2000U, false);
+        server_created = ok;
+        ok = ok && command_locked("AT+CIPSTO=60\r\n", 2000U, false) &&
+             command_locked("AT+CIFSR\r\n", 2000U, false) &&
+             (setup_enabled ? esp_at_parse_ap_ip(response, ip) : esp_at_parse_station_ip(response, ip));
     }
     taskENTER_CRITICAL();
     server_ready = ok && synchronized;

@@ -2,10 +2,12 @@
 #define __PAGE_H__
 
 #include "clock_rtc.h"
+#include "wifi.h"
 
 void welcome_page_display(void);
 void error_page_display(const char *msg);
 void wifi_page_display(void);
+void wifi_setup_page_display(const wifi_view_t *view);
 void main_page_display(void);
 
 void main_page_redraw_wifi_ssid(const char *ssid);

@@ -41,7 +41,15 @@ typedef enum esp_mqtt_probe_result_t {
 esp_mqtt_probe_result_t esp_at_probe_mqtt(void);
 
 bool esp_at_wifi_init(void);
+/* 由唯一网络任务启动临时 WPA2 热点；SSID 为 1～32 字节，口令为 8～63 字节可打印 ASCII。保持终端接口以验证候选网络，热点地址固定为 192.168.4.1。 */
+bool esp_at_setup_start(const char *ssid, const char *password);
+/* 删除服务器并关闭全部连接后关闭热点；失败时调用方须重新初始化模块，不得复用旧连接。 */
+bool esp_at_setup_stop(void);
+/* 查询已经取得 DHCP 地址的热点客户端；查询失败清空结果并返回 false。 */
+bool esp_at_setup_has_client(bool *connected);
 bool esp_at_connect_wifi(const char *ssid, const char *pwd, const char *mac);
+/* 删除服务器及旧连接后断开终端关联，保留配网热点；成功后须重新启动网页服务器，任何失败均要求重新初始化。 */
+bool esp_at_disconnect_wifi(void);
 bool esp_at_get_wifi_info(esp_wifi_info_t *info);
 bool wifi_is_connected(void);
 bool esp_at_sntp_init(void);

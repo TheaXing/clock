@@ -75,11 +75,11 @@ static bool line_end(const char *p) {
 
 /**
  * 功能：从地址查询应答中提取非全零的合法 IPv4 地址。
- * 参数：response，待解析的完整 AT 应答；ip，接收 IPv4 文本的十六字节缓冲区。
+ * 参数：response，待解析的完整 AT 应答；prefix，接口对应的行首前缀；ip，接收 IPv4 文本的十六字节缓冲区。
  * 返回：解析成功返回 true，否则返回 false。
  */
-bool esp_at_parse_station_ip(const char *response, char ip[16]) {
-    const char *p = find_line(response, "+CIFSR:STAIP,");
+static bool parse_interface_ip(const char *response, const char *prefix, char ip[16]) {
+    const char *p = find_line(response, prefix);
     if (p == NULL || ip == NULL || *p++ != '"') {
         return false;
     }
@@ -101,6 +101,78 @@ bool esp_at_parse_station_ip(const char *response, char ip[16]) {
     }
     memcpy(ip, start, length);
     ip[length] = '\0';
+    return true;
+}
+
+/** 功能：提取终端接口地址；参数：完整应答、十六字节地址输出；返回：地址有效为真。 */
+bool esp_at_parse_station_ip(const char *response, char ip[16]) {
+    return parse_interface_ip(response, "+CIFSR:STAIP,", ip);
+}
+
+/** 功能：提取热点接口地址；参数：完整应答、十六字节地址输出；返回：地址有效为真。 */
+bool esp_at_parse_ap_ip(const char *response, char ip[16]) {
+    return parse_interface_ip(response, "+CIFSR:APIP,", ip);
+}
+
+/** 功能：解析上电自动连接开关；参数：完整应答、开关输出；返回：应答有效为真。 */
+bool esp_at_parse_autoconnect(const char *response, bool *enabled) {
+    const char *p = find_line(response, "+CWAUTOCONN:");
+    if (p == NULL || enabled == NULL || (*p != '0' && *p != '1') || !line_end(p + 1U)) {
+        return false;
+    }
+    *enabled = *p == '1';
+    return true;
+}
+
+/** 功能：严格解析热点 DHCP 租约列表；参数：完整应答、是否存在客户端输出；返回：全部行有效为真。 */
+bool esp_at_parse_setup_clients(const char *response, bool *connected) {
+    if (response == NULL || connected == NULL) {
+        return false;
+    }
+    bool found = false;
+    const char *p = response;
+    while (*p != '\0') {
+        if (*p == '\r' || *p == '\n') {
+            ++p;
+            continue;
+        }
+        if (strncmp(p, "OK", 2U) == 0 && line_end(p + 2U)) {
+            p += 2U;
+            continue;
+        }
+        if (strncmp(p, "+CWLIF:", 7U) != 0) {
+            return false;
+        }
+        p += 7U;
+        unsigned nonzero = 0U;
+        for (unsigned n = 0U; n < 4U; ++n) {
+            unsigned octet;
+            const char *start = p;
+            if (!number(&p, 255U, &octet) || p - start > 3) {
+                return false;
+            }
+            nonzero |= octet;
+            if (n < 3U && *p++ != '.') {
+                return false;
+            }
+        }
+        if (nonzero == 0U || *p++ != ',') {
+            return false;
+        }
+        char mac[18];
+        size_t length = strcspn(p, "\r\n");
+        if (length != sizeof mac - 1U) {
+            return false;
+        }
+        memcpy(mac, p, length);
+        mac[length] = '\0';
+        if (!esp_at_valid_mac(mac)) {
+            return false;
+        }
+        p += length;
+        found = true;
+    }
+    *connected = found;
     return true;
 }
 
