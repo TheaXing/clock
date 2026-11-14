@@ -1,6 +1,7 @@
 # Build output and CubeMX scratch files
 /build/
 /mx.scratch
+/.vscode/
 
 # Host-side tests kept only in this checkout
 /tests/
