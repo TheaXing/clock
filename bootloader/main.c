@@ -1,6 +1,7 @@
 #include "boot_platform.h"
 #include "boot_policy.h"
 #include "boot_target.h"
+#include "boot_uart.h"
 #include "ota_config.h"
 #include "ota_image.h"
 #include "clock_config.h"
@@ -56,6 +57,13 @@ static void log_net_reply(const char *name, const boot_net_reply_t *reply) {
     boot_platform_log("\r\n");
 }
 
+/** 功能：输出本次连接的串口故障位；参数：无；返回：无。 */
+static void log_uart_errors(void) {
+    boot_platform_log("[BOOT] ESP UART errors=0x");
+    log_number(boot_uart_errors(), true);
+    boot_platform_log("\r\n");
+}
+
 /** 功能：输出最近安装故障的阶段及位置，不输出包内容或密钥。参数：无。返回：无。 */
 static void log_install_failure(void) {
     static const char *const stage_names[] = {
@@ -100,6 +108,7 @@ static void log_install_failure(void) {
         log_net_reply("pending", &network.diagnostic.pending_reply);
         log_net_reply("close", &network.diagnostic.close_reply);
         log_net_reply("state", &network.diagnostic.state_reply);
+        log_uart_errors();
     }
 }
 
@@ -223,6 +232,7 @@ int main(void) {
         } else {
             record_error(1U);
             boot_platform_log("[BOOT] Network/package preflight failed; check server and AT\r\n");
+            log_uart_errors();
         }
         if (!forced && (uint32_t)(boot_platform_now() - recovery_start) >= 60000U) {
             (void)start_application(true);

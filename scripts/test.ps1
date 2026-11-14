@@ -9,6 +9,7 @@ $testCommands = @(
     'BSP/OTA/tests/run_tests.ps1',
     'BSP/OTA/tests/run_http_tests.ps1',
     'BSP/OTA/tests/run_boot_net_tests.ps1',
+    'BSP/OTA/tests/run_boot_uart_tests.ps1',
     'BSP/OTA/tests/run_boot_policy_tests.ps1',
     'BSP/OTA/tests/run_boot_target_tests.ps1',
     'BSP/OTA/tests/run_discovery_tests.ps1',

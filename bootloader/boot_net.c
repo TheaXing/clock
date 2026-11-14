@@ -451,7 +451,7 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
     bool closed = close_connection(net);
     net->diagnostic.close_ok = closed;
     drain(net);
-    if (!success || !closed) {
+    if (!success || !closed || (net->io.healthy != NULL && !net->io.healthy(net->io.context))) {
         return false;
     }
     if (first) {

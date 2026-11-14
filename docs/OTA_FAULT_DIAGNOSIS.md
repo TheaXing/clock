@@ -141,3 +141,37 @@ Boot若再次失败，会额外打印 `Fetch response: received=... expected=...
 本次验证镜像路径：`build/ota-at-diagnostics/v1/clock-factory-v1.hex`。操作者通过ST-LINK烧录该合并HEX后，继续使用后台现有v2；等待一次完整失败或成功，不在下载期间RESET。若失败，保留从 `Install failed` 到三条 `AT ... RX` 的所有日志。
 
 最终验证：新增诊断场景及完整 `scripts/test.ps1 -IncludeLegacy` 通过，包含50项Node测试；OTA Debug／Release与产物密钥隔离检查通过，App273444字节、Boot19716字节。证据为 `build/ota-at-diagnostic-red.log`、`build/ota-at-payload-red.log`、`build/ota-at-diagnostic-final-net.log`、`build/ota-at-diagnostic-final-tests.log`、`build/ota-at-diagnostic-debug.log`、`build/ota-at-diagnostic-release.log`、`build/ota-at-diagnostic-artifacts.log`。独立审阅发现并确认修正了帧中途超时后记录迟到正文的问题，复审无重要问题。本轮未连接或烧录开发板，实板失败原因仍等待新控制应答。
+
+## 缓存查询被残留字符污染：修复 Boot 串口接收
+
+21:57:43实板提供了确切应答：
+
+```text
+pending_checked=1 pending_ok=0 remaining=0 close_ok=1
+AT pending RX: C+CIPRECVLEN:0\r\n\r\nOK\r\n
+AT close RX: \r\nERROR\r\n
+AT state RX: \r\nOK\r\n
+```
+
+关闭已通过无连接查询确认，失败点是 `C+CIPRECVLEN:0` 不符合独立应答行格式，因此解析器没有取得有效缓存量。网络测试重放该字节串可复现相同结果；完整 `CLOSED\r\n+CIPRECVLEN:0` 则通过。
+
+旧Boot使用阻塞发送和轮询单字节接收。发送AT命令期间没有读取接收寄存器，异步通知可能只保留首字节，其余字节因溢出丢失。项目HAL的发送等待不处理接收，且RXNE已经置位时轮询接收可能直接返回寄存器字节，未报告ORE。该机制与当前残留 `C` 的现象一致；实板未直接记录当时ORE，不能把残留字符来源描述为已经单独证实。[STM32F407参考手册](https://www.st.com/resource/en/reference_manual/dm00031020-stm32f405-415-stm32f407-417-stm32f427-437-and-stm32f429-439-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf)描述了未及时读取接收寄存器导致的溢出机制。
+
+本次改为Boot专用的USART2持续中断接收与固定1024字节环形队列，使发送AT和解析HTTP期间仍可保存接收字节；队列满、硬件错误或重装接收失败均使本轮连接失败，不静默丢字节。每次恢复连接重新初始化，跳App前关闭接收及中断。Boot向量表的USART2项同步指向实际处理函数，增加二进制向量检查，避免落入原默认处理函数。
+
+HTTP长度、Range、ETag、缓存为零、连接关闭和最终镜像认证规则保持原样，没有接受 `C+CIPRECVLEN` 或搜索行内子串的兼容捷径。Flash擦写期间仍关闭中断，仍须先关闭连接再写Flash；环形缓冲不能替代这个约束。
+
+新工厂镜像路径为 `build/ota-uart-fix/v1/clock-factory-v1.hex`，仍使用现有配置、密钥和版本1；后台原v2保持发布。通过ST-LINK烧录并校验后，先打开串口，再按一次RESET启动，KEY1不要按住。升级过程中不再RESET；成功标志为 `Installation verified; trial boot` 和随后进入App。若失败，保留全部失败诊断及新增的 `ESP UART errors=0x...`。
+
+新增底层健康检查在关闭与最后排空后执行，避免已收到的 `CLOSED` 掩盖随后锁存的串口故障。错误低位沿用HAL定义（例如0x08为ORE）；0x10000为队列满，0x20000为启动或重装接收失败，0x40000为传输故障。错误保留到下一次连接初始化。
+
+主机验证通过：完整 `scripts/test.ps1 -IncludeLegacy`（含50项Node）、OTA Debug／Release、产物密钥隔离与向量检查。App273444字节、Boot21736字节；Boot二进制0xD8向量为0x08001A75，等于符号表的USART2_IRQHandler地址0x08001A74加Thumb位。证据为 `build/ota-uart-red.log`、`build/ota-uart-transport-red.log`、`build/ota-uart-vector-red.log`、`build/ota-uart-final-driver.log`、`build/ota-uart-net-green.log`、`build/ota-uart-final-tests.log`、`build/ota-uart-debug.log`、`build/ota-uart-release.log`、`build/ota-uart-artifacts.log`。独立审阅无剩余重要问题。
+
+用户随后明确授权直接烧录并检测串口。使用ST-LINK写入并校验新工厂HEX，COM9按115200/8N1采集，DTR/RTS保持关闭；后台原v2未改变。实板结果如下：
+
+- 22:12:59开始下载v2（image_bytes=272540）。
+- 22:14:16出现 `Installation verified; trial boot`，22:14:18完整镜像验证后进入App。
+- 22:14:22闹钟存储结果0、generation34；22:14:41 OTA状态为version2、identity `8e5f57fc5f5f2de68f0b13796b8883d1`、error0、autoState=current。
+- 22:15:18执行一次升级后复位；Boot直接验证并启动App，没有再次进入恢复下载。22:15:42及之后持续为version2、error0、autoState=current、autoChecks1。
+
+烧录、复位及串口证据分别为 `build/ota-uart-flash.log`、`build/ota-uart-reset-check.log`、`build/ota-uart-board.log`；后者同时保留烧录前旧Boot的失败作为对照。`build/ota-uart-board-verification.log`只摘录新Boot启动后的验收相关日志。本次实板已完成v1工厂镜像恢复下载v2、镜像验证、健康确认及复位后正常启动；未进行断电中断升级等额外破坏性试验。

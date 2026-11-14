@@ -64,7 +64,7 @@ foreach(BOOT_DRIVER hal hal_cortex hal_gpio hal_rcc hal_rcc_ex hal_pwr hal_pwr_e
 endforeach()
 add_executable(Clock_Bootloader
     bootloader/startup.s bootloader/main.c bootloader/boot_platform.c
-    bootloader/boot_net.c bootloader/boot_policy.c bootloader/boot_target.c
+    bootloader/boot_net.c bootloader/boot_uart.c bootloader/boot_policy.c bootloader/boot_target.c
     Core/Src/system_stm32f4xx.c ${BOOT_HAL} ${OTA_COMMON}
     BSP/OTA/ota_installer.c BSP/OTA/ota_http.c)
 target_link_libraries(Clock_Bootloader PRIVATE stm32cubemx)

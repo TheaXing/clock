@@ -30,7 +30,9 @@ typedef enum {
     PENDING_REPLY_NORMAL,
     PENDING_REPLY_EMPTY_SLOT,
     PENDING_REPLY_ERROR,
-    PENDING_REPLY_TIMEOUT
+    PENDING_REPLY_TIMEOUT,
+    PENDING_REPLY_CORRUPTED_CLOSED,
+    PENDING_REPLY_INTACT_CLOSED
 } pending_reply_t;
 
 /** 模拟真实 AT 字节流和被动 TCP 缓存。 */
@@ -70,6 +72,8 @@ typedef struct {
     unsigned payload_timeout_after; // 非零时在指定正文接收调用处模拟一次超时
     unsigned payload_receives; // 最后范围正文接收调用次数
     bool payload_timeout_fired; // 是否已经触发正文超时且留下迟到数据
+    bool fail_close_transport; // 关闭命令开始时模拟底层锁存故障
+    bool transport_failed; // 本轮底层传输已失效
 } fixture_t;
 
 /** 功能：追加精确UART字节；参数：夹具和字节；返回：无。 */
@@ -178,6 +182,12 @@ static bool send_bytes(void *context, const void *data, size_t n) {
                 queue(f, reply, strlen(reply));
             } else if (f->final_pending_reply == PENDING_REPLY_ERROR) {
                 queue(f, "\r\nERROR\r\n", 9U);
+            } else if (f->final_pending_reply == PENDING_REPLY_CORRUPTED_CLOSED) {
+                const char *reply = "C+CIPRECVLEN:0\r\n\r\nOK\r\n";
+                queue(f, reply, strlen(reply));
+            } else if (f->final_pending_reply == PENDING_REPLY_INTACT_CLOSED) {
+                const char *reply = "CLOSED\r\n+CIPRECVLEN:0\r\n\r\nOK\r\n";
+                queue(f, reply, strlen(reply));
             }
             return true;
         }
@@ -207,6 +217,10 @@ static bool send_bytes(void *context, const void *data, size_t n) {
         }
     } else if (strncmp(cmd, "AT+CIPCLOSE", 11) == 0) {
         ++f->close_commands;
+        if (f->fail_close_transport) {
+            f->transport_failed = true;
+            return false;
+        }
         if (f->close_no_acknowledgement) {
             return true;
         } else if (f->close_error) {
@@ -298,6 +312,11 @@ static void delay(void *context, uint32_t ms) {
     ((fixture_t *)context)->time += ms;
 }
 
+/** 功能：提供底层故障锁存状态；参数：夹具；返回：本轮无故障为真。 */
+static bool healthy(void *context) {
+    return !((fixture_t *)context)->transport_failed;
+}
+
 /** 功能：复现数据窗口结束后填充污染命令行并验证恢复；参数：无；返回：无。 */
 static void test_input_window_recovery(void) {
     const size_t remaining[] = {64U, 4096U};
@@ -305,7 +324,7 @@ static void test_input_window_recovery(void) {
         fixture_t f = {0};
         f.input_remaining = remaining[i];
         boot_net_t net;
-        boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f};
+        boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};
         assert(boot_net_connect(&net, &io, "wifi", "password", "192.168.1.10", 8788U, "/firmware.ota"));
         assert(f.input_remaining == 0U);
         assert(!f.dirty_line);
@@ -319,7 +338,7 @@ static void test_slow_response_lines(void) {
     fixture_t f = {0};
     f.byte_interval = 25U;
     boot_net_t net;
-    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f};
+    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};
     assert(boot_net_connect(&net, &io, "wifi", "password", "192.168.1.10", 8788U, "/firmware.ota"));
     assert(f.reset_commands == 1U);
     assert(f.time < 5000U);
@@ -329,7 +348,7 @@ static void test_slow_response_lines(void) {
 static void test_host_length_boundary(void) {
     fixture_t f = {0};
     boot_net_t net;
-    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f};
+    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};
     char host[66];
     memset(host, 'a', sizeof host);
     host[32] = '.';
@@ -344,7 +363,7 @@ static void test_host_length_boundary(void) {
 static void download_actual_image(fixture_t *f) {
     f->package_total = 272796U;
     boot_net_t net;
-    boot_net_io_t io = {send_bytes, receive_byte, now, delay, f};
+    boot_net_io_t io = {send_bytes, receive_byte, now, delay, f, healthy};
     uint8_t bytes[4096];
     assert(boot_net_connect(&net, &io, "wifi", "password", "192.168.1.10", 8788U, "/firmware.ota"));
     assert(boot_net_manifest(&net, bytes));
@@ -417,7 +436,7 @@ static void test_close_ok_without_closed_notice(void) {
 static void connect_tail_fixture(fixture_t *f, boot_net_t *net, uint8_t *bytes) {
     f->package_total = 272796U;
     f->omit_tail_closed = true;
-    boot_net_io_t io = {send_bytes, receive_byte, now, delay, f};
+    boot_net_io_t io = {send_bytes, receive_byte, now, delay, f, healthy};
     assert(boot_net_connect(net, &io, "wifi", "password", "192.168.1.10", 8788U, "/firmware.ota"));
     assert(boot_net_manifest(net, bytes));
     assert(f->close_commands == 1U);
@@ -557,6 +576,40 @@ static void test_final_pending_failure_diagnostics(void) {
     }
 }
 
+/** 功能：复现实板丢字节应答并验证只有完整通知和独立查询才可放行；参数：无；返回：无。 */
+static void test_live_corrupted_close_response(void) {
+    for (unsigned intact = 0U; intact < 2U; ++intact) {
+        fixture_t f = {0};
+        boot_net_t net;
+        uint8_t bytes[4096];
+        connect_tail_fixture(&f, &net, bytes);
+        f.final_pending_reply = intact ? PENDING_REPLY_INTACT_CLOSED : PENDING_REPLY_CORRUPTED_CLOSED;
+        f.close_error = true;
+        f.state_reply = STATE_REPLY_EMPTY;
+        assert(boot_net_fetch(&net, 270592U, bytes, 2204U) == (intact != 0U));
+        assert(net.http.complete && !net.http.failed && net.http.received == 2204U);
+        assert(net.diagnostic.final_pending_checked && net.diagnostic.close_ok);
+        assert(net.diagnostic.final_pending_ok == (intact != 0U));
+        assert(net.peer_closed == (intact != 0U));
+        assert_reply(&net.diagnostic.pending_reply, intact ?
+            "CLOSED\r\n+CIPRECVLEN:0\r\n\r\nOK\r\n" : "C+CIPRECVLEN:0\r\n\r\nOK\r\n");
+        assert_reply(&net.diagnostic.close_reply, "\r\nERROR\r\n");
+        assert_reply(&net.diagnostic.state_reply, intact ? "" : "\r\nOK\r\n");
+    }
+}
+
+/** 功能：已有关闭通知不得掩盖最后阶段锁存的串口故障；参数：无；返回：无。 */
+static void test_closed_notice_does_not_hide_transport_error(void) {
+    fixture_t f = {0};
+    boot_net_t net;
+    uint8_t bytes[4096];
+    connect_tail_fixture(&f, &net, bytes);
+    f.omit_tail_closed = false;
+    f.fail_close_transport = true;
+    assert(!boot_net_fetch(&net, 270592U, bytes, 2204U));
+    assert(net.http.complete && net.peer_closed && f.transport_failed);
+}
+
 /** 功能：区分零缓存后关闭查询的不同结果并验证下一请求清除旧证据；参数：无；返回：无。 */
 static void test_close_diagnostics_and_reset(void) {
     const state_reply_t replies[] = {STATE_REPLY_EMPTY, STATE_REPLY_ACTIVE, STATE_REPLY_TIMEOUT};
@@ -653,7 +706,7 @@ static void test_partial_payload_is_not_recorded(void) {
 int main(void) {
     fixture_t f = {0};
     boot_net_t net;
-    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f};
+    boot_net_io_t io = {send_bytes, receive_byte, now, delay, &f, healthy};
     uint8_t bytes[256];
     assert(boot_net_connect(&net, &io, "wifi", "password", "192.168.1.10", 8788, "/firmware.ota"));
     assert(boot_net_manifest(&net, bytes));
@@ -675,6 +728,8 @@ int main(void) {
     test_invalid_tail_responses();
     test_cross_frame_extra_and_invalid_state_lines();
     test_final_pending_failure_diagnostics();
+    test_live_corrupted_close_response();
+    test_closed_notice_does_not_hide_transport_error();
     test_close_diagnostics_and_reset();
     test_extra_cache_diagnostics();
     test_raw_reply_diagnostic_bounds();

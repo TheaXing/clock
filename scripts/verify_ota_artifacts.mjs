@@ -36,4 +36,10 @@ const bootEntry = boot.readUInt32LE(4);
 assert.equal(bootEntry & 1, 1, 'Boot reset entry must be Thumb');
 assert.ok(bootEntry - 1 >= 0x08000188 && bootEntry - 1 < 0x08010000,
   'Boot reset entry must be in the Boot region');
+const bootUsart2Entry = boot.readUInt32LE((16 + 38) * 4);
+assert.equal(bootUsart2Entry & 1, 1, 'Boot USART2 IRQ entry must be Thumb');
+assert.ok(bootUsart2Entry - 1 >= 0x08000188 && bootUsart2Entry - 1 < 0x08000000 + boot.length,
+  'Boot USART2 IRQ entry must be in the Boot image');
+assert.notEqual(bootUsart2Entry, boot.readUInt32LE(16 * 4),
+  'Boot USART2 IRQ must not point to the unused default handler');
 console.log(`OTA artifact checks passed: App ${app.length} B; Boot ${boot.length} B; no downloadable release key or raw token`);

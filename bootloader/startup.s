@@ -9,7 +9,11 @@
 .word Default_Handler
 .endr
 .word SysTick_Handler
-.rept 82
+.rept 38
+.word Default_Handler
+.endr
+.word USART2_IRQHandler
+.rept 43
 .word Default_Handler
 .endr
 

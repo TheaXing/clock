@@ -1,4 +1,5 @@
 #include "boot_platform.h"
+#include "boot_uart.h"
 #include "stm32f4xx_hal.h"
 #include <string.h>
 
@@ -91,21 +92,13 @@ void boot_platform_delay(uint32_t ms) {
 /** 功能：发送完整UART数据；参数：未用上下文、字节及长度；返回：成功为真。 */
 static bool net_send(void *context, const void *data, size_t length) {
     (void)context;
-    if (length > UINT16_MAX) {
-        return false;
-    }
-    return HAL_UART_Transmit(&esp_uart, (uint8_t *)data, (uint16_t)length, 2000U) == HAL_OK;
+    return boot_uart_send(data, length);
 }
 
-/** 功能：读取UART单字节并清理硬件错误；参数：未用上下文、输出和超时；返回：成功为真。 */
+/** 功能：从持续接收队列读取单字节；参数：未用上下文、输出和超时；返回：成功为真。 */
 static bool net_receive(void *context, uint8_t *out, uint32_t timeout) {
     (void)context;
-    HAL_StatusTypeDef result = HAL_UART_Receive(&esp_uart, out, 1U, timeout);
-    if (result != HAL_OK && result != HAL_TIMEOUT) {
-        __HAL_UART_CLEAR_OREFLAG(&esp_uart);
-        esp_uart.RxState = HAL_UART_STATE_READY;
-    }
-    return result == HAL_OK;
+    return boot_uart_receive(out, timeout);
 }
 
 /** 功能：提供可替换时间回调；参数：未用上下文；返回：毫秒。 */
@@ -120,9 +113,16 @@ static void net_delay(void *context, uint32_t ms) {
     HAL_Delay(ms);
 }
 
+/** 功能：在交付正文前检查本轮锁存的串口故障；参数：未用上下文；返回：无故障为真。 */
+static bool net_healthy(void *context) {
+    (void)context;
+    return boot_uart_errors() == 0U;
+}
+
 /** 功能：返回网络硬件适配器；参数：无；返回：回调集合。 */
 boot_net_io_t boot_platform_net_io(void) {
-    boot_net_io_t io = {net_send, net_receive, net_now, net_delay, NULL};
+    (void)boot_uart_start(&esp_uart);
+    boot_net_io_t io = {net_send, net_receive, net_now, net_delay, NULL, net_healthy};
     return io;
 }
 
@@ -295,6 +295,7 @@ static void branch_app(uint32_t stack __attribute__((unused)), uint32_t entry __
 
 /** 功能：关闭Boot外设后安全交接，调用者须已验证镜像；参数：无；返回：不返回。 */
 void boot_platform_jump(void) {
+    boot_uart_stop();
     (void)HAL_UART_DeInit(&esp_uart);
     (void)HAL_UART_DeInit(&debug_uart);
     (void)HAL_I2C_DeInit(&eeprom_bus);

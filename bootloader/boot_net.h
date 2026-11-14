@@ -9,6 +9,7 @@ typedef struct {
     uint32_t (*now)(void *); // 返回单调毫秒计数
     void (*delay)(void *, uint32_t); // 有界等待
     void *context; // 底层上下文
+    bool (*healthy)(void *); // 可选的本轮传输完整性检查，阻止已锁存的底层故障被关闭通知掩盖
 } boot_net_io_t;
 
 /** 保存有界控制应答，供失败后输出而不阻塞接收。 */
