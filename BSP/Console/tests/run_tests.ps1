@@ -10,6 +10,6 @@ $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.C
 if (-not $vsInstall) { throw 'MSVC C compiler is required for these native tests.' }
 $devCmd = Join-Path $vsInstall 'Common7/Tools/VsDevCmd.bat'
 # MSVC's own CRT exports _write; rename only in this host build to avoid collision.
-$nativeCommand = '"{0}" -no_logo -arch=x64 && cl /nologo /std:c11 /W4 /WX /D_write=clock_test_write /FI"{1}/logger_redirect.h" /I"{1}" /I"{2}" "{3}" "{4}" /Fo"{5}\\" /Fe"{5}/test_console.exe" && "{5}/test_console.exe" && "{5}/test_console.exe" fail-first && "{5}/test_console.exe" fail-second' -f $devCmd, (Join-Path $PSScriptRoot 'stubs'), $taskRoot, (Join-Path $taskRoot 'clock_console.c'), (Join-Path $PSScriptRoot 'test_console.c'), $testBuild
+$nativeCommand = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /D_write=clock_test_write /FI"{1}/logger_redirect.h" /I"{1}" /I"{2}" "{3}" "{4}" /Fo"{5}\\" /Fe"{5}/test_console.exe" && "{5}/test_console.exe" && "{5}/test_console.exe" fail-first && "{5}/test_console.exe" fail-second' -f $devCmd, (Join-Path $PSScriptRoot 'stubs'), $taskRoot, (Join-Path $taskRoot 'clock_console.c'), (Join-Path $PSScriptRoot 'test_console.c'), $testBuild
 & cmd.exe /d /s /c $nativeCommand
 if ($LASTEXITCODE -ne 0) { throw 'Console tests failed.' }

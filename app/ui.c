@@ -6,6 +6,12 @@
 #include "main.h"
 #include "st7789.h"
 #include "ui.h"
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#include "ota_service.h"
+#define UI_RECEIVE_WAIT pdMS_TO_TICKS(250U)
+#else
+#define UI_RECEIVE_WAIT portMAX_DELAY
+#endif
 
 typedef enum { UI_ACTION_FILL_COLOR, UI_ACTION_WRITE_STRING, UI_ACTION_DRAW_IMAGE } ui_action_t;
 
@@ -52,7 +58,10 @@ static void ui_func(void *param) {
     st7789_init();
 
     for (;;) {
-        if (xQueueReceive(ui_queue, &msg, portMAX_DELAY) != pdPASS) {
+        if (xQueueReceive(ui_queue, &msg, UI_RECEIVE_WAIT) != pdPASS) {
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+            ota_service_heartbeat(OTA_HEARTBEAT_UI);
+#endif
             continue;
         }
 
@@ -76,6 +85,9 @@ static void ui_func(void *param) {
             configASSERT(0);
             break;
         }
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+        ota_service_heartbeat(OTA_HEARTBEAT_UI);
+#endif
     }
 }
 

@@ -18,6 +18,9 @@
 #include "alarm_service.h"
 #include "clock_web.h"
 #include "onenet_service.h"
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#include "ota_service.h"
+#endif
 
 static TaskHandle_t clock_task, sensor_task, network_task;
 /** 缓存主页面最近一次采集的数据，供菜单关闭后恢复显示。 */
@@ -174,6 +177,9 @@ static void clock_loop(void *unused) {
         if (++seconds % 10U == 0U) {
             (void)workqueue_try_run(heartbeat, NULL);
         }
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+        ota_service_heartbeat(OTA_HEARTBEAT_CLOCK);
+#endif
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(1000));
     }
 }
@@ -353,6 +359,10 @@ static void network_loop(void *unused) {
         now = xTaskGetTickCount();
         clock_web_network(connected, (uint32_t)now);
         clock_web_poll((uint32_t)xTaskGetTickCount());
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+        /* 网页处理函数已发送完响应并关闭连接；此处是唯一允许复位的网络边界。 */
+        ota_service_network_poll((uint32_t)xTaskGetTickCount());
+#endif
         if (connected &&
             elapsed(now, last_sync, synced ? CLOCK_SYNC_INTERVAL_MS : CLOCK_SYNC_RETRY_MS)) {
             synced = synchronize();
@@ -389,4 +399,9 @@ void app_init(void) {
     // 创建网络任务，负责处理OneNET服务的网络通信，包括MQTT连接、订阅、发布等操作。
     created = xTaskCreate(network_loop, "network", 2048, NULL, 3, &network_task);
     configASSERT(created == pdPASS);
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    if (created == pdPASS && clock_task != NULL && sensor_task != NULL && network_task != NULL) {
+        ota_service_start();
+    }
+#endif
 }

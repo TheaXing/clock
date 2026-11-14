@@ -28,6 +28,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(${CMAKE_PROJECT_NAME})
 option(CLOCK_RGB_TEST "Run the preserved RGB/workqueue hardware smoke test" OFF)
 option(CLOCK_BUZZER_ACTIVE "Drive an active buzzer with GPIO instead of PWM" OFF)
+option(CLOCK_OTA_ENABLED "Build authenticated single-slot OTA App and recovery Bootloader" OFF)
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 # Enable CMake support for ASM and C languages
@@ -80,6 +81,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     BSP/ESP_AT/esp_at.c
     BSP/ESP_AT/esp_at_parse.c
     BSP/ST7789/st7789.c
+    app/ota/ota_service.c
 )
 
 # 旧版 Keil 页面和资源统一以 UTF-8 读入，保留原有 GBK 字符串执行字节。
@@ -133,6 +135,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     BSP/Console
     BSP/ESP_AT
     BSP/ST7789
+    BSP/OTA
+    app/ota
 )
 
 # Add project symbols (macros)
@@ -163,3 +167,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
 )
+include(cmake/ota.cmake)

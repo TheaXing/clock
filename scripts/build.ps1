@@ -2,7 +2,9 @@ param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [switch]$Clean,
     [switch]$RgbTest,
-    [switch]$ActiveBuzzer
+    [switch]$ActiveBuzzer,
+    [switch]$Ota,
+    [string]$OtaConfig = ''
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -18,9 +20,16 @@ Push-Location $repoRoot
 try {
     $rgb = if ($RgbTest) { 'ON' } else { 'OFF' }
     $active = if ($ActiveBuzzer) { 'ON' } else { 'OFF' }
-    & $cmake.Source --preset $Configuration "-DCLOCK_RGB_TEST=$rgb" "-DCLOCK_BUZZER_ACTIVE=$active"
+    $buildPreset = if ($Ota) { "Ota$Configuration" } else { $Configuration }
+    $otaEnabled = if ($Ota) { 'ON' } else { 'OFF' }
+    $configureArgs = @('--preset', $buildPreset, "-DCLOCK_RGB_TEST=$rgb", "-DCLOCK_BUZZER_ACTIVE=$active", "-DCLOCK_OTA_ENABLED=$otaEnabled")
+    if ($OtaConfig) {
+        $otaConfigPath = (Resolve-Path -LiteralPath $OtaConfig).Path
+        $configureArgs += "-DCLOCK_OTA_CONFIG_FILE=$otaConfigPath"
+    }
+    & $cmake.Source @configureArgs
     if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed.' }
-    $buildArgs = @('--build', '--preset', $Configuration)
+    $buildArgs = @('--build', '--preset', $buildPreset)
     if ($Clean) { $buildArgs += '--clean-first' }
     & $cmake.Source @buildArgs
     if ($LASTEXITCODE -ne 0) { throw 'Firmware build failed.' }

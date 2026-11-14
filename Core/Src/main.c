@@ -39,6 +39,9 @@
 #include "clock_web.h"
 #include "web_session.h"
 #include "onenet_service.h"
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#include "ota_service.h"
+#endif
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -199,6 +202,10 @@ int main(void) {
         0); //这段代码是为了禁用标准输出的缓冲区，使得printf等函数的输出能够立即显示在终端上，而不需要等待缓冲区满或程序结束。
     clock_log("[SYS] Clock_CubeMX %s; %s %s\r\n", APP_VERSION, __DATE__, __TIME__);
     workqueue_init();
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    /* EEPROM 全设备锁及 OTA 工作资源必须先于调度器创建。 */
+    ota_service_init();
+#endif
 #if CLOCK_RGB_TEST
     if (xTaskCreate(test_task, "Test", 256, NULL, 1, NULL) != pdPASS) {
         Error_Handler();

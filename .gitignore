@@ -9,6 +9,8 @@
 # Machine-local configuration and credentials
 /app/clock_config_local.h
 /app/onenet_config_local.h
+/app/ota_config_local.h
+/app/ota_key_local.json
 /CMakeUserPresets.json
 /compile_commands.json
 

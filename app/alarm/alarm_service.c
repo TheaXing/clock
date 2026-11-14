@@ -12,6 +12,9 @@
 #include "task.h"
 #include "queue.h"
 #include "semphr.h"
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#include "ota_service.h"
+#endif
 #include <string.h>
 
 /* BSP 和引擎均使用可回绕的 32 位毫秒计数。 */
@@ -66,6 +69,7 @@ static QueueHandle_t save_queue, result_queue, view_queue, remote_queue;
 static volatile bool owns_display;
 static volatile uint32_t display_epoch;
 static bool initialized;
+static alarm_maintenance_state_t maintenance;
 /* 仅在短 RTOS 临界区中与网络任务共享；网络调用者不得接触引擎或物理菜单。 */
 /** 保存仅在短 RTOS 临界区内与网络任务共享的状态和请求结果。 */
 static struct {
@@ -180,7 +184,8 @@ static alarm_remote_submit_t remote_submit(uint8_t index, const alarm_entry_t *e
     taskENTER_CRITICAL();
     if (!initialized) {
         result = ALARM_REMOTE_UNAVAILABLE;
-    } else if (published.pending_id != 0U || published.snapshot.saving ||
+    } else if (maintenance != ALARM_MAINTENANCE_NONE ||
+               published.pending_id != 0U || published.snapshot.saving ||
                published.snapshot.local_editing) {
         result = ALARM_REMOTE_BUSY;
     } else if (expected_version != published.snapshot.state_version) {
@@ -202,6 +207,66 @@ static alarm_remote_submit_t remote_submit(uint8_t index, const alarm_entry_t *e
     }
     taskEXIT_CRITICAL();
     return result;
+}
+
+/**
+ * 功能：预留 OTA 维护请求并立即阻止新的远程更新，最终准入由所有者确认。
+ * 参数：无。
+ * 返回：请求成功预留返回 true，服务不可用或存在冲突返回 false。
+ */
+bool alarm_service_maintenance_request(void) {
+    bool accepted = false;
+    taskENTER_CRITICAL();
+    if (initialized && maintenance == ALARM_MAINTENANCE_NONE &&
+        published.pending_id == 0U && !published.snapshot.saving &&
+        !published.snapshot.local_editing && published.snapshot.ringing_mask == 0U &&
+        published.snapshot.snoozed_mask == 0U && !published.snapshot.test_pending &&
+        !published.snapshot.test_ringing) {
+        maintenance = ALARM_MAINTENANCE_PENDING;
+        accepted = true;
+    }
+    taskEXIT_CRITICAL();
+    return accepted;
+}
+
+/**
+ * 功能：读取所有者发布的维护准入状态。
+ * 参数：无。
+ * 返回：维护请求阶段。
+ */
+alarm_maintenance_state_t alarm_service_maintenance_state(void) {
+    alarm_maintenance_state_t result;
+    taskENTER_CRITICAL();
+    result = maintenance;
+    taskEXIT_CRITICAL();
+    return result;
+}
+
+/**
+ * 功能：在 OTA 保存失败后释放维护准入，使下一次所有者循环恢复本地操作。
+ * 参数：无。
+ * 返回：无。
+ */
+void alarm_service_maintenance_release(void) {
+    taskENTER_CRITICAL();
+    maintenance = ALARM_MAINTENANCE_NONE;
+    taskEXIT_CRITICAL();
+}
+
+/**
+ * 功能：由所有者在本轮动作之后重新检查全部冲突并原子确认维护准入。
+ * 参数：无。
+ * 返回：无。
+ */
+static void collect_maintenance(void) {
+    taskENTER_CRITICAL();
+    if (maintenance == ALARM_MAINTENANCE_PENDING) {
+        bool busy = owner.saving || local_editor_active() || published.pending_id != 0U ||
+                    owner.engine.ringing_mask != 0U || owner.engine.snoozed_mask != 0U ||
+                    owner.test_pending || owner.test_ringing;
+        maintenance = busy ? ALARM_MAINTENANCE_REJECTED : ALARM_MAINTENANCE_ACTIVE;
+    }
+    taskEXIT_CRITICAL();
 }
 
 /**
@@ -378,6 +443,14 @@ static void save_worker(void *argument) {
     for (;;) {
         if (xQueueReceive(save_queue, &job, portMAX_DELAY) == pdTRUE) {
             memset(&result, 0, sizeof result);
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+            if (!bl24c512_transaction_begin()) {
+                result.result = ALARM_STORE_IO_ERROR;
+                result.generation = store.generation;
+                (void)xQueueSend(result_queue, &result, portMAX_DELAY);
+                continue;
+            }
+#endif
             /* 启动读取失败可能使内存保留默认值或旧槽位配置。应在新近验证的持久化快照上
              * 仅合并用户编辑的条目；未读槽位可能包含更新代数。 */
             result.result = alarm_store_load_for_update(&store, &result.config);
@@ -397,6 +470,9 @@ static void save_worker(void *argument) {
                 }
             }
             result.generation = store.generation;
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+            bl24c512_transaction_end();
+#endif
             /* 同一时刻只有一个未完成任务，因此结果队列始终有可用位置。 */
             (void)xQueueSend(result_queue, &result, portMAX_DELAY);
         }
@@ -779,13 +855,22 @@ static void alarm_task(void *argument) {
     for (;;) {
         uint32_t now_ms = (uint32_t)xTaskGetTickCount();
         collect_save_result();
-        poll_engine(now_ms);
-        poll_diagnostic(now_ms);
-        handle_input(board_keys_poll(now_ms), now_ms);
-        collect_remote_request();
+        if (alarm_service_maintenance_state() != ALARM_MAINTENANCE_ACTIVE) {
+            poll_engine(now_ms);
+            poll_diagnostic(now_ms);
+            handle_input(board_keys_poll(now_ms), now_ms);
+            collect_remote_request();
+            collect_maintenance();
+        } else {
+            /* 丢弃维护期间的按键事件，防止失败恢复后执行积压的编辑动作。 */
+            (void)board_keys_poll(now_ms);
+        }
         update_buzzer(now_ms);
         publish_view(now_ms);
         publish_service_snapshot();
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+        ota_service_heartbeat(OTA_HEARTBEAT_ALARM);
+#endif
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(10U));
     }
 }
@@ -840,7 +925,16 @@ void alarm_service_init(void) {
     board_keys_init();
     alarm_config_defaults(&config);
     alarm_store_init(&store, io);
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    if (bl24c512_transaction_begin()) {
+        loaded = alarm_store_load(&store, &config);
+        bl24c512_transaction_end();
+    } else {
+        loaded = ALARM_STORE_IO_ERROR;
+    }
+#else
     loaded = alarm_store_load(&store, &config);
+#endif
     owner.storage_ok = loaded == ALARM_STORE_OK;
     if (!owner.storage_ok) {
         alarm_config_defaults(&config);

@@ -5,6 +5,9 @@
 #include "alarm_engine.h"
 #include "esp_at.h"
 #include "clock_console.h"
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#include "ota_service.h"
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +15,11 @@
 #define WEB_LINKS 5U
 #define WEB_RETRY_MS 30000U
 #define WEB_REQUEST_MS 35000U
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+#define WEB_OTA_SUPPORTED "true"
+#else
+#define WEB_OTA_SUPPORTED "false"
+#endif
 /** 保存一个网页连接的解析器、连接代次和超时状态。 */
 typedef struct {
     clock_http_parser_t parser; // 该连接的单请求 HTTP 解析器
@@ -168,6 +176,7 @@ static void get_alarms(unsigned link) {
     size_t used = 0;
     bool ok = append(&used,
                      "{\"session\":%lu,\"version\":%lu,\"revision\":%lu,\"time_valid\":%s,"
+                     "\"ota_supported\":" WEB_OTA_SUPPORTED ","
                      "\"time\":\"%04u-%02u-%02u %02u:%02u:%02u\",\"saving\":%s,\"storage_ok\":%s,"
                      "\"ringing_mask\":%u,\"snoozed_mask\":%u,\"local_editing\":%s,\"alarms\":[",
                      (unsigned long)session_token, (unsigned long)data.state_version,
@@ -299,6 +308,52 @@ static void post_alarm(unsigned link, unsigned index, const clock_http_parser_t 
 }
 
 /**
+ * 功能：返回不包含管理令牌或密钥的 OTA 阶段及本次启动请求编号。
+ * 参数：link，接收响应的连接编号；status，HTTP 状态文本。
+ * 返回：无。
+ */
+static void get_ota(unsigned link, const char *status) {
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    ota_service_status(json, sizeof json, session_token);
+#else
+    (void)snprintf(json, sizeof json,
+                   "{\"enabled\":false,\"session\":%lu,\"version\":0,\"identity\":\"\","
+                   "\"state\":\"disabled\",\"error\":0,\"saving\":false,\"id\":0}",
+                   (unsigned long)session_token);
+#endif
+    respond(link, status, "application/json; charset=utf-8", json, strlen(json));
+}
+
+/**
+ * 功能：校验请求头后异步提交 OTA，202 只表示进入保存队列。
+ * 参数：link，接收响应的连接编号；request，完整 HTTP 请求。
+ * 返回：无。
+ */
+static void post_ota(unsigned link, const clock_http_parser_t *request) {
+    int status = 503;
+    if (!request->has_clock_request) {
+        error_response(link, "403 Forbidden", "request_header_required");
+        return;
+    }
+    if (!request->form_content_type) {
+        error_response(link, "415 Unsupported Media Type", "form_required");
+        return;
+    }
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    status = ota_service_request(request->body, session_token);
+#endif
+    if (status == 202) {
+        get_ota(link, "202 Accepted");
+    } else if (status == 403) {
+        error_response(link, "403 Forbidden", "ota_authentication_failed");
+    } else if (status == 409) {
+        error_response(link, "409 Conflict", "ota_busy");
+    } else {
+        error_response(link, "503 Service Unavailable", "ota_unavailable");
+    }
+}
+
+/**
  * 功能：根据完整 HTTP 请求的方法和目标选择页面或闹钟接口处理。
  * 参数：link，已完成请求解析的连接编号。
  * 返回：无。
@@ -311,6 +366,8 @@ static void dispatch(unsigned link) {
                     clock_web_page_length);
         } else if (strcmp(request->target, "/api/alarms") == 0) {
             get_alarms(link);
+        } else if (strcmp(request->target, "/api/ota") == 0) {
+            get_ota(link, "200 OK");
         } else if (strncmp(request->target, "/api/result?", 12) == 0) {
             get_result(link, request->target + 12);
         } else if (strcmp(request->target, "/favicon.ico") == 0) {
@@ -318,6 +375,8 @@ static void dispatch(unsigned link) {
         } else {
             error_response(link, "404 Not Found", "not_found");
         }
+    } else if (strcmp(request->target, "/api/ota") == 0) {
+        post_ota(link, request);
     } else if (strncmp(request->target, "/api/alarms/", 12) == 0 && request->target[12] >= '1' &&
                request->target[12] <= '8' && request->target[13] == '\0') {
         post_alarm(link, (unsigned)(request->target[12] - '1'), request);

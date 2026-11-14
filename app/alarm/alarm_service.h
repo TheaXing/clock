@@ -35,6 +35,19 @@ typedef enum {
     ALARM_REMOTE_FAILED
 } alarm_remote_result_t;
 
+typedef enum {
+    ALARM_MAINTENANCE_NONE,
+    ALARM_MAINTENANCE_PENDING,
+    ALARM_MAINTENANCE_ACTIVE,
+    ALARM_MAINTENANCE_REJECTED
+} alarm_maintenance_state_t;
+
+/* 网络任务只预留准入请求；所有者处理当前时间、按键和排队更新后原子确认。
+ * ACTIVE 期间冻结新的保存、编辑、响铃及贪睡动作，失败释放后恢复正常服务。 */
+bool alarm_service_maintenance_request(void);
+alarm_maintenance_state_t alarm_service_maintenance_state(void);
+void alarm_service_maintenance_release(void);
+
 /* 仅在任务上下文中调用且不阻塞；全部服务任务可用之前返回 false。
  * state_version 在启动时初始化，并在每次持久化配置应用时推进；网络调用者必须
  * 同时校验独立的启动或会话令牌。 */
