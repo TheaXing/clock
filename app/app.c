@@ -295,6 +295,8 @@ void app_init(void)
     configASSERT(created == pdPASS);
     created = xTaskCreate(sensor_loop, "sensor", 1024, NULL, 3, &sensor_task);
     configASSERT(created == pdPASS);
+
+    // 创建网络任务，负责处理OneNET服务的网络通信，包括MQTT连接、订阅、发布等操作。
     created = xTaskCreate(network_loop, "network", 2048, NULL, 3, &network_task);
     configASSERT(created == pdPASS);
 }

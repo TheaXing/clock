@@ -126,8 +126,13 @@ static void ClockInitTask(void *argument)
     alarm_service_init();
     uint32_t web_session=clock_web_session_token();
     clock_web_init(web_session);
-    onenet_service_init();
-    if(!web_session)clock_log_line("[WEB] Session RNG unavailable; web control disabled, local functions continue");
+    
+    onenet_service_init(); // OneNET service initialization
+
+    if(!web_session) {
+      clock_log_line("[WEB] Session RNG unavailable; web control disabled, local functions continue");
+    }
+    
     app_init();
     vTaskDelete(NULL);
 }
@@ -172,7 +177,7 @@ int main(void)
   MX_I2C2_Init();
   MX_I2C1_Init();
   clock_console_init();
-  setvbuf(stdout, NULL, _IONBF, 0);
+  setvbuf(stdout, NULL, _IONBF, 0);//这段代码是为了禁用标准输出的缓冲区，使得printf等函数的输出能够立即显示在终端上，而不需要等待缓冲区满或程序结束。
   clock_log("[SYS] Clock_CubeMX %s; %s %s\r\n", APP_VERSION, __DATE__, __TIME__);
   workqueue_init();
 #if CLOCK_RGB_TEST

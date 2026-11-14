@@ -29,6 +29,7 @@ typedef struct {
     bool used,pending,reply_due;
 } command_cache_t;
 typedef struct {uint32_t id,sent_ms;uint16_t mask;bool used;} pending_post_t;
+
 static struct {
     command_cache_t cache[CACHE_COUNT];
     pending_post_t posts[POST_COUNT];
@@ -68,7 +69,10 @@ bool onenet_service_busy(void)
 }
 void onenet_service_init(void)
 {
-    memset(&cloud,0,sizeof cloud);memset(&work,0,sizeof work);
+    // 初始化OneNET服务的状态，包括清空缓存、设置重试时间和报告标志等。
+    // memset是用来将指定内存区域的内容设置为0，这里用于清空cloud和work结构体的内容。
+    memset(&cloud,0,sizeof cloud);// cloud是一个结构体，包含了OneNET服务的状态信息，如缓存、报告标志、重试时间等。通过memset将其所有成员初始化为0。
+    memset(&work,0,sizeof work);
     memset(&indoor,0,sizeof indoor);
     cloud.retry_ms=5000U;cloud.next_post=100U;cloud.reports=ONENET_PROPERTY_ALL;
     cloud.initialized=true;
@@ -114,7 +118,7 @@ void onenet_service_network(bool wifi_connected,bool esp_time_ready,uint32_t now
         if(!cloud.waiting_time_logged){clock_log_line("[ONENET] Waiting for ESP SNTP before verified TLS");cloud.waiting_time_logged=true;}
         return;
     }
-    if(!esp_at_is_ready() || (cloud.attempted && now_ms-cloud.last_attempt<cloud.retry_ms))return;
+    if(!esp_at_is_ready() || (cloud.attempted && now_ms - cloud.last_attempt<cloud.retry_ms))return;
  #if CLOCK_ONENET_TOKEN_EXPIRES != 0
     alarm_service_snapshot_t snapshot;
     uint32_t seconds;
