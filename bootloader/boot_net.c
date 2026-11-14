@@ -319,6 +319,42 @@ static bool pull(boot_net_t *net) {
     return false;
 }
 
+/** 功能：在关闭命令未确认时查询是否仍有连接；参数：下载器；返回：完整查询明确无连接时为真。 */
+static bool connection_absent(boot_net_t *net) {
+    char line[256];
+    bool active = false;
+    uint32_t start = net->io.now(net->io.context);
+    if (!send_text(net, "AT+CIPSTATE?\r\n")) {
+        return false;
+    }
+    while (before(net, start, 1000U)) {
+        uint32_t elapsed = (uint32_t)(net->io.now(net->io.context) - start);
+        if (elapsed >= 1000U) {
+            break;
+        }
+        if (!line_read(net, line, sizeof line, 1000U - elapsed)) {
+            return false;
+        }
+        if (strcmp(line, "OK") == 0) {
+            return !active;
+        }
+        if (strncmp(line, "+CIPSTATE:", 10U) == 0) {
+            active = true;
+        } else if (strcmp(line, "CLOSED") != 0) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/** 功能：主动关闭TCP并在异步关闭通知缺失时核实连接状态；参数：下载器；返回：连接已确认关闭时为真。 */
+static bool close_connection(boot_net_t *net) {
+    if (command(net, "AT+CIPCLOSE\r\n", 1000U) || net->peer_closed) {
+        return true;
+    }
+    return connection_absent(net);
+}
+
 /** 功能：执行完整有限Range事务；参数：状态和目标范围；返回：完全校验并关闭为真。 */
 static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t length, bool first) {
     char command_text[512];
@@ -326,6 +362,8 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
         (!first && (net->total == 0U || offset + length > net->total))) {
         return false;
     }
+    ota_http_init(&net->http, offset, (uint32_t)length, first ? 0U : net->total,
+                  first ? NULL : net->etag, data);
     drain(net);
     net->peer_closed = false;
     int n = format_text(command_text, sizeof command_text, "AT+CIPSTART=\"TCP\",\"%s\",%u,,,5000\r\n",
@@ -356,11 +394,22 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
         !wait_for(net, "SEND OK", 2000U)) {
         return false;
     }
-    ota_http_init(&net->http, offset, (uint32_t)length, first ? 0U : net->total,
-                  first ? NULL : net->etag, data);
     bool success = false;
     start = net->io.now(net->io.context);
     while (before(net, start, 15000U)) {
+        /* 正文完成后只检查一次现存缓存，再主动关闭，不等待异步 CLOSED。
+         * 无法核实缓存量或已有额外字节时仍拒绝，不能把关闭状态当作长度证明。 */
+        if (net->http.complete) {
+            uint32_t remaining;
+            if (pending(net, &remaining)) {
+                success = remaining == 0U;
+                if (!success) {
+                    net->http.failed = true;
+                    net->http.complete = false;
+                }
+            }
+            break;
+        }
         uint32_t available;
         if (!pending(net, &available)) {
             break;
@@ -376,9 +425,9 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
             net->io.delay(net->io.context, 10U);
         }
     }
-    bool closed = command(net, "AT+CIPCLOSE\r\n", 1000U);
+    bool closed = close_connection(net);
     drain(net);
-    if (!success || (!closed && !net->peer_closed)) {
+    if (!success || !closed) {
         return false;
     }
     if (first) {

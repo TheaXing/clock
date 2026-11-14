@@ -45,6 +45,19 @@ static void log_install_failure(void) {
     boot_platform_log(" store=");
     log_number((uint32_t)diagnostic.store_result, false);
     boot_platform_log("\r\n");
+    if (diagnostic.stage == OTA_INSTALL_STAGE_FETCH) {
+        boot_platform_log("[BOOT] Fetch response: received=");
+        log_number(network.http.received, false);
+        boot_platform_log(" expected=");
+        log_number(network.http.length, false);
+        boot_platform_log(" complete=");
+        log_number(network.http.complete ? 1U : 0U, false);
+        boot_platform_log(" failed=");
+        log_number(network.http.failed ? 1U : 0U, false);
+        boot_platform_log(" peer_closed=");
+        log_number(network.peer_closed ? 1U : 0U, false);
+        boot_platform_log("\r\n");
+    }
 }
 
 /** 功能：完整验证内部应用描述及实际镜像；参数：输出描述；返回：可启动为真。 */

@@ -93,3 +93,30 @@ EEPROM中断事务、线路电平与外部上拉尚需实板证据。Boot和App�
 执行日志位于 `build/ota-health-*.log`。主机测试不能代替烧录诊断版后的实板失败阶段确认。
 
 2026-11-14最终验证：上述完整测试入口通过，包含新增5个EEPROM诊断场景、11个服务场景、3个确定性抢占场景、安装器故障阶段和原有50项Node／遗留回归。普通及OTA的Debug／Release四种构建通过，Release App273444字节、Boot18660字节；签名、向量、容量和密钥隔离检查通过。独立源码审阅无重要问题。诊断版使用现有实际配置构建，未烧录、未上传后台或修改当前发布。
+
+## 最后一块下载失败的后续修复
+
+新实板日志显示 `stage=fetch image_offset=270336`、镜像长度272540，即66个4096字节块之后，最后2204字节失败。对应包Range为 `270592-272795/272796`，计算正确；该阶段失败发生在尾块写入Flash之前。
+
+主机模拟同样大小的完整包复现了一个关闭通知依赖问题：旧下载器即使已收到全部2204字节、HTTP解析完整且主动关闭成功，仍会因为没有收到异步 `CLOSED` 而返回失败。修复后的规则为：
+
+1. HTTP头、长度、Range和固定ETag均通过，正文精确收齐。
+2. 只查询一次当前接收缓存，必须明确为零；无法查询或已缓存额外字节均拒绝。
+3. 主动关闭TCP，成功确认后才交付正文；若关闭命令报错且未收到关闭通知，只能通过完整 `AT+CIPSTATE?` 回复确认没有活动连接。
+4. 状态查询含非法字节、超长行、未知行、活动连接、错误或超时均拒绝，不从后续孤立的OK推断成功。
+
+此流程符合[ESP-AT 4.1 ESP32-C3命令说明](https://docs.espressif.com/projects/esp-at/en/release-v4.1.0.0/esp32c3/AT_Command_Set/TCP-IP_AT_Commands.html#at-cipstate-obtain-the-tcp-udp-ssl-connection-information)中主动关闭与无连接查询的接口。固定目标、HMAC、完整镜像SHA及先关闭连接再写Flash的顺序不变。模拟已复现源代码缺陷，但板上是否由相同通知时序触发仍需重新安装后确认。
+
+本次工厂镜像使用新的目录，包含上述Boot修复：
+
+```text
+build/ota-tail-fix/v1/clock-factory-v1.hex
+```
+
+继续使用现有配置与发布密钥、版本1，后台保持原v2发布。因为修复在Boot中，需要操作者通过ST-LINK安装这份合并HEX一次；只上传App不能更新Boot。可沿用前文烧录命令，将HEX路径改为该文件。原来的v1/v2包及上一份诊断镜像均保留；本次未连接或烧录开发板，也未改变后台发布。
+
+Boot若再次失败，会额外打印 `Fetch response: received=... expected=... complete=... failed=... peer_closed=...`，用于区分未收齐、HTTP校验失败与关闭确认失败；每次请求开始前重置HTTP状态，避免误报上一块的接收计数。
+
+网络回归包括真实大小完整下载、尾响应总长2559/2560/2561与关闭通知先后顺序、丢失通知、关闭与查询失败，以及截断/错误身份/错误范围/同帧和跨帧额外数据。证据日志 `build/ota-tail-red.log`、`build/ota-tail-protocol-red.log` 和 `build/ota-tail-final-net.log`。
+
+最终 `scripts/test.ps1 -IncludeLegacy` 全部通过（含50项Node），OTA Debug／Release构建与密钥隔离检查通过。Release App273444字节、Boot19100字节。完整日志为 `build/ota-tail-final-tests.log`、`build/ota-tail-ota-debug.log`、`build/ota-tail-ota-release.log`、`build/ota-tail-artifacts.log`。独立审阅确认跨帧额外数据与非法状态行均被拒绝，无重要问题遗留；实板成功仍待操作者验证。
