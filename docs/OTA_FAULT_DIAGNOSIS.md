@@ -120,3 +120,24 @@ Boot若再次失败，会额外打印 `Fetch response: received=... expected=...
 网络回归包括真实大小完整下载、尾响应总长2559/2560/2561与关闭通知先后顺序、丢失通知、关闭与查询失败，以及截断/错误身份/错误范围/同帧和跨帧额外数据。证据日志 `build/ota-tail-red.log`、`build/ota-tail-protocol-red.log` 和 `build/ota-tail-final-net.log`。
 
 最终 `scripts/test.ps1 -IncludeLegacy` 全部通过（含50项Node），OTA Debug／Release构建与密钥隔离检查通过。Release App273444字节、Boot19100字节。完整日志为 `build/ota-tail-final-tests.log`、`build/ota-tail-ota-debug.log`、`build/ota-tail-ota-release.log`、`build/ota-tail-artifacts.log`。独立审阅确认跨帧额外数据与非法状态行均被拒绝，无重要问题遗留；实板成功仍待操作者验证。
+
+## 正文收齐后仍失败：记录实际 AT 应答
+
+21:37:50实板使用上一版后仍失败：`received=2204 expected=2204 complete=1 failed=0 peer_closed=0`。这证明尾块正文和HTTP范围校验通过，但无法区分最后一次 `AT+CIPRECVLEN?` 查询失败与关闭确认失败；尚未进行完整镜像SHA验证。上一版关闭处理修复没有解决这次实板故障，不能将其描述为已经修复成功。
+
+本次只增加诊断，不改变安装放行条件。新日志在原有两行后增加：
+
+```text
+[BOOT] Fetch finish: pending_checked=1 pending_ok=0 remaining=0 close_ok=1
+[BOOT] AT pending RX: ...
+[BOOT] AT close RX: ...
+[BOOT] AT state RX: ...
+```
+
+以上数值仅为格式示例。`pending_ok=0` 时 `remaining` 无效；`pending_ok=1 remaining=0 close_ok=0` 才能明确归入关闭确认失败。三个RX字段保留各步骤实际消费的控制应答，回车、换行、反斜杠和非打印字节均转义，最多各96字节；截断时标记 `[truncated]`，未读取字节时显示 `[empty]`。原解析器若提前退出，后续字节可能出现在下一步骤，这是诊断需要保留的证据。
+
+接收时只将字节写入RAM，安装失败后才向调试串口打印，不同步转发正文，不打印请求、Wi-Fi密码或密钥。只有正文与最后一个被动接收帧完整结束、进入末次缓存查询后，才开启这些原始应答记录；接收中途超时后的迟到正文不会被关闭诊断收录。每次有效Range开始前清除记录。诊断不得把异常应答、空字段或未知状态默认为零，也不得用正文收齐代替关闭确认或镜像认证。
+
+本次验证镜像路径：`build/ota-at-diagnostics/v1/clock-factory-v1.hex`。操作者通过ST-LINK烧录该合并HEX后，继续使用后台现有v2；等待一次完整失败或成功，不在下载期间RESET。若失败，保留从 `Install failed` 到三条 `AT ... RX` 的所有日志。
+
+最终验证：新增诊断场景及完整 `scripts/test.ps1 -IncludeLegacy` 通过，包含50项Node测试；OTA Debug／Release与产物密钥隔离检查通过，App273444字节、Boot19716字节。证据为 `build/ota-at-diagnostic-red.log`、`build/ota-at-payload-red.log`、`build/ota-at-diagnostic-final-net.log`、`build/ota-at-diagnostic-final-tests.log`、`build/ota-at-diagnostic-debug.log`、`build/ota-at-diagnostic-release.log`、`build/ota-at-diagnostic-artifacts.log`。独立审阅发现并确认修正了帧中途超时后记录迟到正文的问题，复审无重要问题。本轮未连接或烧录开发板，实板失败原因仍等待新控制应答。

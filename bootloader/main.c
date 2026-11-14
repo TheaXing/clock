@@ -25,6 +25,37 @@ static void log_number(uint32_t value, bool hexadecimal) {
     boot_platform_log(position);
 }
 
+/** 功能：失败后转义输出有界控制应答，避免影响下载接收；参数：步骤名和记录；返回：无。 */
+static void log_net_reply(const char *name, const boot_net_reply_t *reply) {
+    static const char digits[] = "0123456789ABCDEF";
+    boot_platform_log("[BOOT] AT ");
+    boot_platform_log(name);
+    boot_platform_log(" RX: ");
+    if (reply->length == 0U) {
+        boot_platform_log("[empty]");
+    }
+    for (size_t i = 0U; i < reply->length; ++i) {
+        uint8_t byte = reply->bytes[i];
+        if (byte == '\r') {
+            boot_platform_log("\\r");
+        } else if (byte == '\n') {
+            boot_platform_log("\\n");
+        } else if (byte == '\\') {
+            boot_platform_log("\\\\");
+        } else if (byte >= 32U && byte <= 126U) {
+            char text[2] = {(char)byte, '\0'};
+            boot_platform_log(text);
+        } else {
+            char text[5] = {'\\', 'x', digits[byte >> 4], digits[byte & 15U], '\0'};
+            boot_platform_log(text);
+        }
+    }
+    if (reply->truncated) {
+        boot_platform_log(" [truncated]");
+    }
+    boot_platform_log("\r\n");
+}
+
 /** 功能：输出最近安装故障的阶段及位置，不输出包内容或密钥。参数：无。返回：无。 */
 static void log_install_failure(void) {
     static const char *const stage_names[] = {
@@ -57,6 +88,18 @@ static void log_install_failure(void) {
         boot_platform_log(" peer_closed=");
         log_number(network.peer_closed ? 1U : 0U, false);
         boot_platform_log("\r\n");
+        boot_platform_log("[BOOT] Fetch finish: pending_checked=");
+        log_number(network.diagnostic.final_pending_checked ? 1U : 0U, false);
+        boot_platform_log(" pending_ok=");
+        log_number(network.diagnostic.final_pending_ok ? 1U : 0U, false);
+        boot_platform_log(" remaining=");
+        log_number(network.diagnostic.final_pending, false);
+        boot_platform_log(" close_ok=");
+        log_number(network.diagnostic.close_ok ? 1U : 0U, false);
+        boot_platform_log("\r\n");
+        log_net_reply("pending", &network.diagnostic.pending_reply);
+        log_net_reply("close", &network.diagnostic.close_reply);
+        log_net_reply("state", &network.diagnostic.state_reply);
     }
 }
 

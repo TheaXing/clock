@@ -25,6 +25,14 @@ typedef enum {
     STATE_REPLY_TOO_LONG
 } state_reply_t;
 
+/** 区分正文读完后的缓存查询应答。 */
+typedef enum {
+    PENDING_REPLY_NORMAL,
+    PENDING_REPLY_EMPTY_SLOT,
+    PENDING_REPLY_ERROR,
+    PENDING_REPLY_TIMEOUT
+} pending_reply_t;
+
 /** 模拟真实 AT 字节流和被动 TCP 缓存。 */
 typedef struct {
     uint8_t queue[16384]; // 待接收 UART 字节
@@ -58,6 +66,10 @@ typedef struct {
     size_t truncated_tail_bytes; // 从最后正文末尾截断的字节数
     bool wrong_tail_range; // 是否篡改最后范围的起始偏移
     size_t extra_tail_bytes; // 最后范围正文后额外发送的字节数
+    pending_reply_t final_pending_reply; // 最后范围耗尽缓存后的查询应答
+    unsigned payload_timeout_after; // 非零时在指定正文接收调用处模拟一次超时
+    unsigned payload_receives; // 最后范围正文接收调用次数
+    bool payload_timeout_fired; // 是否已经触发正文超时且留下迟到数据
 } fixture_t;
 
 /** 功能：追加精确UART字节；参数：夹具和字节；返回：无。 */
@@ -159,6 +171,16 @@ static bool send_bytes(void *context, const void *data, size_t n) {
     } else if (strncmp(cmd, "AT+CIPSEND=", 11) == 0) {
         queue(f, "\r\n>", 3);
     } else if (strncmp(cmd, "AT+CIPRECVLEN?", 14) == 0) {
+        if (f->tail_range && f->consumed == f->wire_size &&
+            f->final_pending_reply != PENDING_REPLY_NORMAL) {
+            if (f->final_pending_reply == PENDING_REPLY_EMPTY_SLOT) {
+                const char *reply = "\r\n+CIPRECVLEN:,,,,,\r\nOK\r\n";
+                queue(f, reply, strlen(reply));
+            } else if (f->final_pending_reply == PENDING_REPLY_ERROR) {
+                queue(f, "\r\nERROR\r\n", 9U);
+            }
+            return true;
+        }
         char reply[128];
         int count = sprintf_s(reply, sizeof reply, "\r\n+CIPRECVLEN:%u\r\n%sOK\r\n",
             (unsigned)(f->wire_size - f->consumed),
@@ -237,6 +259,15 @@ static bool send_bytes(void *context, const void *data, size_t n) {
 /** 功能：读取模拟字节；参数：夹具、输出和超时；返回：有数据为真。 */
 static bool receive_byte(void *context, uint8_t *out, uint32_t timeout) {
     fixture_t *f = context;
+    if (f->tail_range && timeout == 100U && f->payload_timeout_after != 0U &&
+        !f->payload_timeout_fired) {
+        ++f->payload_receives;
+        if (f->payload_receives == f->payload_timeout_after) {
+            f->payload_timeout_fired = true;
+            f->time += timeout;
+            return false;
+        }
+    }
     if (f->byte_interval != 0U && f->read < f->used) {
         if (f->time < f->next_byte_at) {
             uint32_t wait = f->next_byte_at - f->time;
@@ -493,6 +524,131 @@ static void test_cross_frame_extra_and_invalid_state_lines(void) {
     }
     assert(accepted_invalid == 0U);
 }
+
+/** 功能：验证诊断保存精确控制应答且没有混入正文；参数：记录和预期文本；返回：无。 */
+static void assert_reply(const boot_net_reply_t *reply, const char *expected) {
+    assert(reply->length == strlen(expected));
+    assert(memcmp(reply->bytes, expected, reply->length) == 0);
+    assert(!reply->truncated);
+}
+
+/** 功能：区分完整正文之后的查询失败和关闭成功；参数：无；返回：无。 */
+static void test_final_pending_failure_diagnostics(void) {
+    const pending_reply_t replies[] = {
+        PENDING_REPLY_EMPTY_SLOT, PENDING_REPLY_ERROR, PENDING_REPLY_TIMEOUT
+    };
+    const char *expected[] = {"\r\n+CIPRECVLEN:,,,,,\r\n", "\r\nERROR\r\n", ""};
+    for (size_t i = 0U; i < sizeof replies / sizeof replies[0]; ++i) {
+        fixture_t f = {0};
+        boot_net_t net;
+        uint8_t bytes[4096];
+        connect_tail_fixture(&f, &net, bytes);
+        f.final_pending_reply = replies[i];
+        f.close_without_notice = true;
+        assert(!boot_net_fetch(&net, 270592U, bytes, 2204U));
+        assert(net.http.complete && !net.http.failed && net.http.received == 2204U);
+        assert(net.diagnostic.final_pending_checked);
+        assert(!net.diagnostic.final_pending_ok);
+        assert(net.diagnostic.close_ok);
+        assert_reply(&net.diagnostic.pending_reply, expected[i]);
+        assert_reply(&net.diagnostic.close_reply,
+            replies[i] == PENDING_REPLY_EMPTY_SLOT ? "OK\r\n" : "\r\nOK\r\n");
+        assert_reply(&net.diagnostic.state_reply, "");
+    }
+}
+
+/** 功能：区分零缓存后关闭查询的不同结果并验证下一请求清除旧证据；参数：无；返回：无。 */
+static void test_close_diagnostics_and_reset(void) {
+    const state_reply_t replies[] = {STATE_REPLY_EMPTY, STATE_REPLY_ACTIVE, STATE_REPLY_TIMEOUT};
+    const char *expected[] = {
+        "\r\nOK\r\n", "\r\n+CIPSTATE:0,\"TCP\",\"192.168.1.10\",8788,49152,0\r\nOK\r\n", ""
+    };
+    for (size_t i = 0U; i < sizeof replies / sizeof replies[0]; ++i) {
+        fixture_t f = {0};
+        boot_net_t net;
+        uint8_t bytes[4096];
+        connect_tail_fixture(&f, &net, bytes);
+        f.close_error = true;
+        f.state_reply = replies[i];
+        bool fetched = boot_net_fetch(&net, 270592U, bytes, 2204U);
+        assert(fetched == (replies[i] == STATE_REPLY_EMPTY));
+        assert(net.diagnostic.final_pending_checked && net.diagnostic.final_pending_ok);
+        assert(net.diagnostic.final_pending == 0U);
+        assert(net.diagnostic.close_ok == fetched);
+        assert_reply(&net.diagnostic.pending_reply, "\r\n+CIPRECVLEN:0\r\nOK\r\n");
+        assert_reply(&net.diagnostic.close_reply, "\r\nERROR\r\n");
+        assert_reply(&net.diagnostic.state_reply, expected[i]);
+        f.close_error = false;
+        f.close_without_notice = true;
+        assert(boot_net_fetch(&net, 270592U, bytes, 2204U));
+        assert(net.diagnostic.final_pending_checked && net.diagnostic.final_pending_ok);
+        assert(net.diagnostic.close_ok);
+        assert_reply(&net.diagnostic.close_reply, "\r\nOK\r\n");
+        assert_reply(&net.diagnostic.state_reply, "");
+    }
+}
+
+/** 功能：额外缓存字节在诊断中保留实际数量且继续拒绝下载；参数：无；返回：无。 */
+static void test_extra_cache_diagnostics(void) {
+    fixture_t f = {0};
+    boot_net_t net;
+    uint8_t bytes[4096];
+    connect_tail_fixture(&f, &net, bytes);
+    f.pad_tail_to_boundary = true;
+    f.extra_tail_bytes = 1U;
+    assert(!boot_net_fetch(&net, 270592U, bytes, 2204U));
+    assert(net.http.failed && !net.http.complete);
+    assert(net.diagnostic.final_pending_checked && net.diagnostic.final_pending_ok);
+    assert(net.diagnostic.final_pending == 1U && net.diagnostic.close_ok);
+    assert_reply(&net.diagnostic.pending_reply, "\r\n+CIPRECVLEN:1\r\nOK\r\n");
+}
+
+/** 功能：非法零字节和超长应答仍被拒绝且原始诊断有界；参数：无；返回：无。 */
+static void test_raw_reply_diagnostic_bounds(void) {
+    for (unsigned scenario = 0U; scenario < 2U; ++scenario) {
+        fixture_t f = {0};
+        boot_net_t net;
+        uint8_t bytes[4096];
+        connect_tail_fixture(&f, &net, bytes);
+        f.close_error = true;
+        f.state_reply = scenario == 0U ? STATE_REPLY_NUL : STATE_REPLY_TOO_LONG;
+        assert(!boot_net_fetch(&net, 270592U, bytes, 2204U));
+        assert(net.diagnostic.final_pending_ok && !net.diagnostic.close_ok);
+        const boot_net_reply_t *reply = &net.diagnostic.state_reply;
+        if (scenario == 0U) {
+            const uint8_t expected[] = {'\r', '\n', 0U};
+            assert(reply->length == sizeof expected);
+            assert(memcmp(reply->bytes, expected, sizeof expected) == 0);
+            assert(!reply->truncated);
+        } else {
+            assert(reply->length == sizeof reply->bytes && reply->truncated);
+            for (size_t i = 0U; i < reply->length; ++i) {
+                assert(reply->bytes[i] == 'x');
+            }
+        }
+    }
+}
+
+/** 功能：正文帧内超时后迟到的载荷不得进入控制应答诊断；参数：无；返回：无。 */
+static void test_partial_payload_is_not_recorded(void) {
+    fixture_t f = {0};
+    boot_net_t net;
+    uint8_t bytes[4096];
+    connect_tail_fixture(&f, &net, bytes);
+    f.payload_timeout_after = 300U;
+    assert(!boot_net_fetch(&net, 270592U, bytes, 2204U));
+    assert(f.payload_timeout_fired);
+    assert(!net.http.complete);
+    assert(!net.diagnostic.final_pending_checked);
+    assert_reply(&net.diagnostic.pending_reply, "");
+    if (net.diagnostic.close_reply.length != 0U || net.diagnostic.state_reply.length != 0U) {
+        fprintf(stderr, "Partial payload leaked into diagnostic: close=%zu state=%zu\n",
+            net.diagnostic.close_reply.length, net.diagnostic.state_reply.length);
+    }
+    assert_reply(&net.diagnostic.close_reply, "");
+    assert_reply(&net.diagnostic.state_reply, "");
+}
+
 /** 功能：运行真实下载器和二进制/身份测试；参数：无；返回：成功为零。 */
 int main(void) {
     fixture_t f = {0};
@@ -518,6 +674,11 @@ int main(void) {
     test_close_and_state_without_acknowledgement();
     test_invalid_tail_responses();
     test_cross_frame_extra_and_invalid_state_lines();
+    test_final_pending_failure_diagnostics();
+    test_close_diagnostics_and_reset();
+    test_extra_cache_diagnostics();
+    test_raw_reply_diagnostic_bounds();
+    test_partial_payload_is_not_recorded();
     puts("Boot ESP passive binary download, close-before-write, range and identity tests passed");
     return 0;
 }

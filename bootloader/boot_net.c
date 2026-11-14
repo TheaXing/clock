@@ -80,6 +80,13 @@ static bool line_read(boot_net_t *net, char *line, size_t capacity, uint32_t lim
         if (!net->io.receive(net->io.context, &byte, 20U)) {
             continue;
         }
+        if (net->capture != NULL) {
+            if (net->capture->length < sizeof net->capture->bytes) {
+                net->capture->bytes[net->capture->length++] = byte;
+            } else {
+                net->capture->truncated = true;
+            }
+        }
         if (byte == '\r') {
             continue;
         }
@@ -349,10 +356,19 @@ static bool connection_absent(boot_net_t *net) {
 
 /** 功能：主动关闭TCP并在异步关闭通知缺失时核实连接状态；参数：下载器；返回：连接已确认关闭时为真。 */
 static bool close_connection(boot_net_t *net) {
-    if (command(net, "AT+CIPCLOSE\r\n", 1000U) || net->peer_closed) {
+    /* 只有正文与最后一个被动帧均完整结束后才记录控制应答，
+     * 接收中途超时后迟到的二进制正文不得进入诊断输出。 */
+    bool capture_allowed = net->diagnostic.final_pending_checked;
+    net->capture = capture_allowed ? &net->diagnostic.close_reply : NULL;
+    bool acknowledged = command(net, "AT+CIPCLOSE\r\n", 1000U);
+    net->capture = NULL;
+    if (acknowledged || net->peer_closed) {
         return true;
     }
-    return connection_absent(net);
+    net->capture = capture_allowed ? &net->diagnostic.state_reply : NULL;
+    bool absent = connection_absent(net);
+    net->capture = NULL;
+    return absent;
 }
 
 /** 功能：执行完整有限Range事务；参数：状态和目标范围；返回：完全校验并关闭为真。 */
@@ -362,6 +378,8 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
         (!first && (net->total == 0U || offset + length > net->total))) {
         return false;
     }
+    memset(&net->diagnostic, 0, sizeof net->diagnostic);
+    net->capture = NULL;
     ota_http_init(&net->http, offset, (uint32_t)length, first ? 0U : net->total,
                   first ? NULL : net->etag, data);
     drain(net);
@@ -401,7 +419,12 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
          * 无法核实缓存量或已有额外字节时仍拒绝，不能把关闭状态当作长度证明。 */
         if (net->http.complete) {
             uint32_t remaining;
-            if (pending(net, &remaining)) {
+            net->diagnostic.final_pending_checked = true;
+            net->capture = &net->diagnostic.pending_reply;
+            net->diagnostic.final_pending_ok = pending(net, &remaining);
+            net->capture = NULL;
+            if (net->diagnostic.final_pending_ok) {
+                net->diagnostic.final_pending = remaining;
                 success = remaining == 0U;
                 if (!success) {
                     net->http.failed = true;
@@ -426,6 +449,7 @@ static bool fetch_range(boot_net_t *net, uint32_t offset, void *data, size_t len
         }
     }
     bool closed = close_connection(net);
+    net->diagnostic.close_ok = closed;
     drain(net);
     if (!success || !closed) {
         return false;
