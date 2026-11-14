@@ -1,9 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    stm32f4xx_hal_timebase_tim.c
-  * @brief   HAL time base based on the hardware TIM.
-  ******************************************************************************
+ * @file stm32f4xx_hal_timebase_tim.c
+ * @brief 使用硬件定时器提供 HAL 时基。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,122 +16,101 @@
   */
 /* USER CODE END Header */
 
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_tim.h"
 
-/* Private typedef -----------------------------------------------------------*/
-/* Private define ------------------------------------------------------------*/
-/* Private macro -------------------------------------------------------------*/
-/* Private variables ---------------------------------------------------------*/
-TIM_HandleTypeDef        htim7;
-/* Private function prototypes -----------------------------------------------*/
-/* Private functions ---------------------------------------------------------*/
+/* 内部类型定义 */
+/* 内部常量定义 */
+/* 内部宏 */
+/* 内部变量 */
+TIM_HandleTypeDef htim7;
+/* 内部函数声明 */
+/* 内部函数 */
 
 /**
-  * @brief  This function configures the TIM7 as a time base source.
-  *         The time source is configured  to have 1ms time base with a dedicated
-  *         Tick interrupt priority.
-  * @note   This function is called  automatically at the beginning of program after
-  *         reset by HAL_Init() or at any time when clock is configured, by HAL_RCC_ClockConfig().
-  * @param  TickPriority: Tick interrupt priority.
-  * @retval HAL status
-  */
-HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority)
-{
-  RCC_ClkInitTypeDef    clkconfig;
-  uint32_t              uwTimclock, uwAPB1Prescaler = 0U;
+ * @brief 功能：将 TIM7 配置为一毫秒 HAL 时基，并设置其更新中断优先级。
+ * 参数：
+ * @param tick_priority 时基中断优先级。
+ * @retval 返回：返回 HAL 初始化、启动或优先级检查结果。
+ * @note HAL_Init 在复位后的初始化阶段调用本函数；HAL_RCC_ClockConfig 在重新配置时钟时也会调用。
+ */
+HAL_StatusTypeDef HAL_InitTick(uint32_t tick_priority) {
+    RCC_ClkInitTypeDef clkconfig;
+    uint32_t tim_clock, apb1_prescaler = 0U;
 
-  uint32_t              uwPrescalerValue = 0U;
-  uint32_t              pFLatency;
+    uint32_t prescaler_value = 0U;
+    uint32_t flash_latency;
 
-  HAL_StatusTypeDef     status;
+    HAL_StatusTypeDef status;
 
-  /* Enable TIM7 clock */
-  __HAL_RCC_TIM7_CLK_ENABLE();
+    /* 开启 TIM7 时钟 */
+    __HAL_RCC_TIM7_CLK_ENABLE();
 
-  /* Get clock configuration */
-  HAL_RCC_GetClockConfig(&clkconfig, &pFLatency);
+    /* 读取时钟配置 */
+    HAL_RCC_GetClockConfig(&clkconfig, &flash_latency);
 
-  /* Get APB1 prescaler */
-  uwAPB1Prescaler = clkconfig.APB1CLKDivider;
-  /* Compute TIM7 clock */
-  if (uwAPB1Prescaler == RCC_HCLK_DIV1)
-  {
-    uwTimclock = HAL_RCC_GetPCLK1Freq();
-  }
-  else
-  {
-    uwTimclock = 2UL * HAL_RCC_GetPCLK1Freq();
-  }
-
-  /* Compute the prescaler value to have TIM7 counter clock equal to 1MHz */
-  uwPrescalerValue = (uint32_t) ((uwTimclock / 1000000U) - 1U);
-
-  /* Initialize TIM7 */
-  htim7.Instance = TIM7;
-
-  /* Initialize TIMx peripheral as follow:
-   * Period = [(TIM7CLK/1000) - 1]. to have a (1/1000) s time base.
-   * Prescaler = (uwTimclock/1000000 - 1) to have a 1MHz counter clock.
-   * ClockDivision = 0
-   * Counter direction = Up
-   */
-  htim7.Init.Period = (1000000U / 1000U) - 1U;
-  htim7.Init.Prescaler = uwPrescalerValue;
-  htim7.Init.ClockDivision = 0;
-  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-
-  status = HAL_TIM_Base_Init(&htim7);
-  if (status == HAL_OK)
-  {
-
-    /* Start the TIM time Base generation in interrupt mode */
-    status = HAL_TIM_Base_Start_IT(&htim7);
-    if (status == HAL_OK)
-    {
-    /* Enable the TIM7 global Interrupt */
-        HAL_NVIC_EnableIRQ(TIM7_IRQn);
-      /* Configure the SysTick IRQ priority */
-      if (TickPriority < (1UL << __NVIC_PRIO_BITS))
-      {
-        /* Configure the TIM IRQ priority */
-        HAL_NVIC_SetPriority(TIM7_IRQn, TickPriority, 0U);
-        uwTickPrio = TickPriority;
-      }
-      else
-      {
-        status = HAL_ERROR;
-      }
+    /* 读取 APB1 分频系数 */
+    apb1_prescaler = clkconfig.APB1CLKDivider;
+    /* 计算 TIM7 时钟频率 */
+    if (apb1_prescaler == RCC_HCLK_DIV1) {
+        tim_clock = HAL_RCC_GetPCLK1Freq();
+    } else {
+        tim_clock = 2UL * HAL_RCC_GetPCLK1Freq();
     }
-  }
 
- /* Return function status */
-  return status;
+    /* 计算预分频系数，使 TIM7 计数器时钟为 1 MHz。 */
+    prescaler_value = (uint32_t)((tim_clock / 1000000U) - 1U);
+
+    /* 初始化 TIM7 */
+    htim7.Instance = TIM7;
+
+    /* 配置 TIM7：预分频系数为 tim_clock/1000000-1，使计数器时钟为 1 MHz；自动重装载值为 1000000/1000-1，产生 1 ms 时基；时钟分频为 0，采用向上计数。 */
+    htim7.Init.Period = (1000000U / 1000U) - 1U;
+    htim7.Init.Prescaler = prescaler_value;
+    htim7.Init.ClockDivision = 0;
+    htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+    htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+    status = HAL_TIM_Base_Init(&htim7);
+    if (status == HAL_OK) {
+
+        /* 以中断模式启动定时器时基。 */
+        status = HAL_TIM_Base_Start_IT(&htim7);
+        if (status == HAL_OK) {
+            /* 开启 TIM7 全局中断 */
+            HAL_NVIC_EnableIRQ(TIM7_IRQn);
+            /* 检查 HAL 时基中断优先级范围。 */
+            if (tick_priority < (1UL << __NVIC_PRIO_BITS)) {
+                /* 配置定时器中断优先级 */
+                HAL_NVIC_SetPriority(TIM7_IRQn, tick_priority, 0U);
+                uwTickPrio = tick_priority;
+            } else {
+                status = HAL_ERROR;
+            }
+        }
+    }
+
+    /* 返回函数执行状态 */
+    return status;
 }
 
 /**
-  * @brief  Suspend Tick increment.
-  * @note   Disable the tick increment by disabling TIM7 update interrupt.
-  * @param  None
-  * @retval None
-  */
-void HAL_SuspendTick(void)
-{
-  /* Disable TIM7 update Interrupt */
-  __HAL_TIM_DISABLE_IT(&htim7, TIM_IT_UPDATE);
+ * @brief 功能：关闭 TIM7 更新中断，暂停 HAL 时基递增。
+ * 参数：无。
+ * @retval 返回：无
+ */
+void HAL_SuspendTick(void) {
+    /* 关闭 TIM7 更新中断 */
+    __HAL_TIM_DISABLE_IT(&htim7, TIM_IT_UPDATE);
 }
 
 /**
-  * @brief  Resume Tick increment.
-  * @note   Enable the tick increment by Enabling TIM7 update interrupt.
-  * @param  None
-  * @retval None
-  */
-void HAL_ResumeTick(void)
-{
-  /* Enable TIM7 Update interrupt */
-  __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
+ * @brief 功能：开启 TIM7 更新中断，恢复 HAL 时基递增。
+ * 参数：无。
+ * @retval 返回：无
+ */
+void HAL_ResumeTick(void) {
+    /* 开启 TIM7 更新中断 */
+    __HAL_TIM_ENABLE_IT(&htim7, TIM_IT_UPDATE);
 }
-

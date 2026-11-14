@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/** I2C peripheral configuration. STM32CubeMX-compatible user sections. */
+/** I2C 外设配置，保留与 STM32CubeMX 兼容的用户代码区块。 */
 /* USER CODE END Header */
 #ifndef __I2C_H__
 #define __I2C_H__

@@ -3,15 +3,53 @@
 #include <stdint.h>
 #include <stdbool.h>
 typedef enum { HAL_OK, HAL_ERROR, HAL_TIMEOUT } HAL_StatusTypeDef;
-typedef struct { uint32_t ISR; } RTC_TypeDef;
+/** 提供 RTC 硬件初始化测试所需的最小寄存器布局。 */
+typedef struct {
+    uint32_t ISR; // 模拟 RTC 初始化状态寄存器
+} RTC_TypeDef;
 extern RTC_TypeDef test_rtc_instance;
 #define RTC (&test_rtc_instance)
-typedef struct { uint32_t HourFormat, AsynchPrediv, SynchPrediv, OutPut, OutPutPolarity, OutPutType; } RTC_InitTypeDef;
-typedef struct { RTC_TypeDef *Instance; RTC_InitTypeDef Init; } RTC_HandleTypeDef;
-typedef struct { uint8_t Hours, Minutes, Seconds; } RTC_TimeTypeDef;
-typedef struct { uint8_t WeekDay, Month, Date, Year; } RTC_DateTypeDef;
-typedef struct { uint32_t OscillatorType, LSEState; struct { uint32_t PLLState; } PLL; } RCC_OscInitTypeDef;
-typedef struct { uint32_t PeriphClockSelection, RTCClockSelection; } RCC_PeriphCLKInitTypeDef;
+/** 模拟 HAL RTC 初始化参数，用于校验分频与输出配置。 */
+typedef struct {
+    uint32_t HourFormat;     // RTC 小时格式配置
+    uint32_t AsynchPrediv;   // 异步预分频系数
+    uint32_t SynchPrediv;    // 同步预分频系数
+    uint32_t OutPut;         // RTC 输出选择
+    uint32_t OutPutPolarity; // RTC 输出有效极性
+    uint32_t OutPutType;     // RTC 输出电气类型
+} RTC_InitTypeDef;
+/** 组合模拟 RTC 寄存器实例与初始化参数。 */
+typedef struct {
+    RTC_TypeDef *Instance; // 模拟 RTC 寄存器实例
+    RTC_InitTypeDef Init;  // RTC 初始化参数
+} RTC_HandleTypeDef;
+/** 模拟 HAL RTC 时间字段，用于硬件初始化测试。 */
+typedef struct {
+    uint8_t Hours;   // 小时字段
+    uint8_t Minutes; // 分钟字段
+    uint8_t Seconds; // 秒字段
+} RTC_TimeTypeDef;
+/** 模拟 HAL RTC 日期字段，年份相对于 2000 年。 */
+typedef struct {
+    uint8_t WeekDay; // 星期字段，星期一为 1，星期日为 7
+    uint8_t Month;   // 月份字段，取值为 1～12
+    uint8_t Date;    // 月内日期字段，从 1 开始
+    uint8_t Year;    // 两位年份，相对于 2000 年
+} RTC_DateTypeDef;
+/** 模拟外部低速晶振及锁相环配置参数。 */
+typedef struct {
+    uint32_t OscillatorType; // 待配置的振荡器类型
+    uint32_t LSEState;       // 外部低速晶振开关状态
+    /** 保存模拟锁相环配置操作。 */
+    struct {
+        uint32_t PLLState; // 锁相环配置操作
+    } PLL;                 // 锁相环配置参数
+} RCC_OscInitTypeDef;
+/** 模拟外设与 RTC 时钟源选择参数。 */
+typedef struct {
+    uint32_t PeriphClockSelection; // 待配置的外设时钟类型
+    uint32_t RTCClockSelection;    // RTC 时钟源选择
+} RCC_PeriphCLKInitTypeDef;
 extern uint32_t test_clock_source;
 extern bool test_rtc_enabled;
 #define __HAL_RCC_PWR_CLK_ENABLE() ((void)0)

@@ -1,9 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    stm32f4xx_it.h
-  * @brief   This file contains the headers of the interrupt handlers.
-  ******************************************************************************
+ * @file stm32f4xx_it.h
+ * @brief 声明中断与异常处理函数。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,7 +16,7 @@
   */
 /* USER CODE END Header */
 
-/* Define to prevent recursive inclusion -------------------------------------*/
+/* 防止头文件重复包含 */
 #ifndef __STM32F4xx_IT_H
 #define __STM32F4xx_IT_H
 
@@ -25,27 +24,27 @@
 extern "C" {
 #endif
 
-/* Private includes ----------------------------------------------------------*/
+/* 内部头文件 */
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
 
-/* Exported types ------------------------------------------------------------*/
+/* 对外类型 */
 /* USER CODE BEGIN ET */
 
 /* USER CODE END ET */
 
-/* Exported constants --------------------------------------------------------*/
+/* 对外常量 */
 /* USER CODE BEGIN EC */
 
 /* USER CODE END EC */
 
-/* Exported macro ------------------------------------------------------------*/
+/* 对外宏 */
 /* USER CODE BEGIN EM */
 
 /* USER CODE END EM */
 
-/* Exported functions prototypes ---------------------------------------------*/
+/* 对外函数声明 */
 void NMI_Handler(void);
 void HardFault_Handler(void);
 void MemManage_Handler(void);
@@ -62,4 +61,4 @@ void USART2_IRQHandler(void);
 }
 #endif
 
-#endif /* __STM32F4xx_IT_H */
+#endif /* 条件结束：__STM32F4xx_IT_H */

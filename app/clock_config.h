@@ -1,7 +1,7 @@
 #ifndef CLOCK_CONFIG_H
 #define CLOCK_CONFIG_H
 
-/* The local file is intentionally ignored by Git; copied from the legacy project. */
+/* 本地配置从旧工程迁入，并有意排除在 Git 版本控制之外。 */
 #ifdef CLOCK_LOCAL_CONFIG
 #include "clock_config_local.h"
 #endif

@@ -1,10 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file         stm32f4xx_hal_msp.c
-  * @brief        This file provides code for the MSP Initialization
-  *               and de-Initialization codes.
-  ******************************************************************************
+ * @file stm32f4xx_hal_msp.c
+ * @brief 实现底层硬件初始化与反初始化。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,38 +15,38 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "main.h"
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
 
-/* Private typedef -----------------------------------------------------------*/
+/* 内部类型定义 */
 /* USER CODE BEGIN TD */
 
 /* USER CODE END TD */
 
-/* Private define ------------------------------------------------------------*/
+/* 内部常量定义 */
 /* USER CODE BEGIN Define */
 
 /* USER CODE END Define */
 
-/* Private macro -------------------------------------------------------------*/
+/* 内部宏 */
 /* USER CODE BEGIN Macro */
 
 /* USER CODE END Macro */
 
-/* Private variables ---------------------------------------------------------*/
+/* 内部变量 */
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
 
-/* Private function prototypes -----------------------------------------------*/
+/* 内部函数声明 */
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
-/* External functions --------------------------------------------------------*/
+/* 外部函数 */
 /* USER CODE BEGIN ExternalFunctions */
 
 /* USER CODE END ExternalFunctions */
@@ -56,24 +54,26 @@
 /* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */
+/** 初始化全局底层支持。 */
 /**
-  * Initializes the Global MSP.
-  */
-void HAL_MspInit(void)
-{
+ * @brief 功能：初始化 HAL 全局底层支持，开启 SYSCFG 和电源接口时钟。
+ * 参数：无。
+ * @retval 返回：无
+ */
+void HAL_MspInit(void) {
 
-  /* USER CODE BEGIN MspInit 0 */
+    /* USER CODE BEGIN MspInit 0 */
 
-  /* USER CODE END MspInit 0 */
+    /* USER CODE END MspInit 0 */
 
-  __HAL_RCC_SYSCFG_CLK_ENABLE();
-  __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    __HAL_RCC_PWR_CLK_ENABLE();
 
-  /* System interrupt init*/
+    /* 初始化系统中断 */
 
-  /* USER CODE BEGIN MspInit 1 */
+    /* USER CODE BEGIN MspInit 1 */
 
-  /* USER CODE END MspInit 1 */
+    /* USER CODE END MspInit 1 */
 }
 
 /* USER CODE BEGIN 1 */

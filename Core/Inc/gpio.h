@@ -1,10 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    gpio.h
-  * @brief   This file contains all the function prototypes for
-  *          the gpio.c file
-  ******************************************************************************
+ * @file gpio.h
+ * @brief 声明 gpio.c 的 GPIO 配置接口。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,7 +15,7 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-/* Define to prevent recursive inclusion -------------------------------------*/
+/* 防止头文件重复包含 */
 #ifndef __GPIO_H__
 #define __GPIO_H__
 
@@ -25,7 +23,7 @@
 extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
@@ -45,5 +43,4 @@ void MX_GPIO_Init(void);
 #ifdef __cplusplus
 }
 #endif
-#endif /*__ GPIO_H__ */
-
+#endif /* 条件结束：__GPIO_H__ */

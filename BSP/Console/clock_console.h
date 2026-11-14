@@ -5,12 +5,10 @@
 extern "C" {
 #endif
 
-/* Call once after USART1 initialization and before starting the scheduler. */
+/* 在 USART1 初始化后、调度器启动前调用一次。 */
 void clock_console_init(void);
 
-/* Serialize stdout formatting and transmission. Return count, or -1 on error.
- * Pre-scheduler calls are supported; ISR/suspended-scheduler calls are rejected.
- */
+/* 串行化标准输出的格式化与发送，返回输出字符数，出错返回 -1。支持调度器启动前调用，拒绝中断或调度器已暂停时调用。 */
 int clock_log(const char *format, ...);
 int clock_log_line(const char *text);
 

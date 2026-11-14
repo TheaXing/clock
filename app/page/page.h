@@ -3,7 +3,6 @@
 
 #include "clock_rtc.h"
 
-
 void welcome_page_display(void);
 void error_page_display(const char *msg);
 void wifi_page_display(void);
@@ -17,6 +16,5 @@ void main_page_redraw_inner_humidity(float humidity);
 void main_page_redraw_outdoor_city(const char *city);
 void main_page_redraw_outdoor_temperature(float temperature);
 void main_page_redraw_outdoor_weather_icon(const int code);
-
 
 #endif

@@ -1,10 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    spi.h
-  * @brief   This file contains all the function prototypes for
-  *          the spi.c file
-  ******************************************************************************
+ * @file spi.h
+ * @brief 声明 spi.c 的 SPI 配置接口。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,7 +15,7 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-/* Define to prevent recursive inclusion -------------------------------------*/
+/* 防止头文件重复包含 */
 #ifndef __SPI_H__
 #define __SPI_H__
 
@@ -25,7 +23,7 @@
 extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
@@ -48,5 +46,4 @@ void MX_SPI2_Init(void);
 }
 #endif
 
-#endif /* __SPI_H__ */
-
+#endif /* 条件结束：__SPI_H__ */

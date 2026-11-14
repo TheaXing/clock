@@ -7,7 +7,7 @@
 #define BOARD_KEY1_LONG (1UL << 8)
 #define BOARD_KEY2_LONG (1UL << 9)
 #define BOARD_KEY3_LONG (1UL << 10)
-/* Call once at startup, then poll every 10 ms with monotonic milliseconds. */
+/* 启动时初始化一次，之后每 10 毫秒轮询，并传入单调递增的毫秒时间。 */
 void board_keys_init(void);
 uint32_t board_keys_poll(uint32_t now_ms);
 #endif

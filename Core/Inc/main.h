@@ -1,10 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.h
-  * @brief          : Header for main.c file.
-  *                   This file contains the common defines of the application.
-  ******************************************************************************
+ * @file main.h
+ * @brief 声明主程序接口及应用公共定义。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -18,7 +16,7 @@
   */
 /* USER CODE END Header */
 
-/* Define to prevent recursive inclusion -------------------------------------*/
+/* 防止头文件重复包含 */
 #ifndef __MAIN_H
 #define __MAIN_H
 
@@ -26,37 +24,37 @@
 extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "stm32f4xx_hal.h"
 
-/* Private includes ----------------------------------------------------------*/
+/* 内部头文件 */
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
 
-/* Exported types ------------------------------------------------------------*/
+/* 对外类型 */
 /* USER CODE BEGIN ET */
 
 /* USER CODE END ET */
 
-/* Exported constants --------------------------------------------------------*/
+/* 对外常量 */
 /* USER CODE BEGIN EC */
 
 /* USER CODE END EC */
 
-/* Exported macro ------------------------------------------------------------*/
+/* 对外宏 */
 /* USER CODE BEGIN EM */
 
 /* USER CODE END EM */
 
-/* Exported functions prototypes ---------------------------------------------*/
+/* 对外函数声明 */
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 
 /* USER CODE END EFP */
 
-/* Private defines -----------------------------------------------------------*/
+/* 内部常量定义 */
 #define LCD_CS_Pin GPIO_PIN_2
 #define LCD_CS_GPIO_Port GPIOE
 #define LCD_RST_Pin GPIO_PIN_3
@@ -81,4 +79,4 @@ void Error_Handler(void);
 }
 #endif
 
-#endif /* __MAIN_H */
+#endif /* 条件结束：__MAIN_H */

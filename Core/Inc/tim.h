@@ -1,4 +1,4 @@
-/* TIM3 is dedicated to the PC7 passive buzzer. TIM7 remains the HAL timebase. */
+/* TIM3 专用于 PC7 上的无源蜂鸣器，TIM7 继续作为 HAL 时基。 */
 #ifndef __TIM_H__
 #define __TIM_H__
 #ifdef __cplusplus

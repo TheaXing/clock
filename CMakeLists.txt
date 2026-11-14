@@ -82,8 +82,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     BSP/ST7789/st7789.c
 )
 
-# Only the files actually used by the legacy Keil clock, with their original
-# GB2312 execution bytes. Newly authored HAL/application files stay UTF-8.
+# 旧版 Keil 页面和资源统一以 UTF-8 读入，保留原有 GBK 字符串执行字节。
+# 共享头文件可以使用中文注释，同时保持旧字体和显示内容兼容。
 set(CLOCK_LEGACY_SOURCES
     app/page/welcome_page.c
     app/page/error_page.c
@@ -113,7 +113,7 @@ set(CLOCK_LEGACY_SOURCES
 )
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${CLOCK_LEGACY_SOURCES})
 set_source_files_properties(${CLOCK_LEGACY_SOURCES} PROPERTIES
-    COMPILE_OPTIONS "-finput-charset=GBK;-fexec-charset=GBK")
+    COMPILE_OPTIONS "-finput-charset=UTF-8;-fexec-charset=GBK")
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE

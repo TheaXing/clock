@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-/* const storage is linked into flash; callers stream directly from this array. */
+/* 常量存储链接到闪存；调用者直接从此数组流式发送。 */
 extern const char clock_web_page[];
 extern const size_t clock_web_page_length;
 

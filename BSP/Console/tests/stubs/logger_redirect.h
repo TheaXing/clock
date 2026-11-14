@@ -1,6 +1,6 @@
 #ifndef TEST_LOGGER_REDIRECT_H
 #define TEST_LOGGER_REDIRECT_H
-/* Include MSVC's inline vprintf before renaming calls in the production file. */
+/* 先包含 MSVC 的内联 vprintf 定义，再重命名产品源文件中的调用。 */
 #include <stdio.h>
 #include <stdarg.h>
 int clock_test_vprintf(const char *, va_list);

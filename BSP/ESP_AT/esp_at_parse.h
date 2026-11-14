@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "esp_at.h"
 
-/* Internal portable parsing/escaping helpers, also exercised by host tests. */
+/* 内部可移植解析与转义辅助接口，同时由主机测试验证。 */
 bool esp_at_parse_cwstate(const char *response, esp_wifi_info_t *info);
 bool esp_at_parse_cwjap(const char *response, esp_wifi_info_t *info);
 bool esp_at_parse_sntp(const char *response, esp_date_time_t *date);

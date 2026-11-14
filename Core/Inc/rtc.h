@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/** RTC peripheral configuration. Application adapter is clock_rtc.h. */
+/** RTC 外设配置，应用层适配接口见 clock_rtc.h。 */
 /* USER CODE END Header */
 #ifndef __RTC_H__
 #define __RTC_H__

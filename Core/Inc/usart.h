@@ -1,10 +1,8 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file    usart.h
-  * @brief   This file contains all the function prototypes for
-  *          the usart.c file
-  ******************************************************************************
+ * @file usart.h
+ * @brief 声明 usart.c 的串口配置接口。
+ ******************************************************************************
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -17,7 +15,7 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
-/* Define to prevent recursive inclusion -------------------------------------*/
+/* 防止头文件重复包含 */
 #ifndef __USART_H__
 #define __USART_H__
 
@@ -25,7 +23,7 @@
 extern "C" {
 #endif
 
-/* Includes ------------------------------------------------------------------*/
+/* 头文件 */
 #include "main.h"
 
 /* USER CODE BEGIN Includes */
@@ -50,5 +48,4 @@ void MX_USART2_UART_Init(void);
 }
 #endif
 
-#endif /* __USART_H__ */
-
+#endif /* 条件结束：__USART_H__ */

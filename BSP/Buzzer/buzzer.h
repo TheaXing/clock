@@ -1,7 +1,7 @@
 #ifndef BUZZER_H
 #define BUZZER_H
 #include <stdbool.h>
-/* Default: passive buzzer, PC7 TIM3_CH2 ~2730 Hz. Set to 1 for DC active buzzer. */
+/* 默认使用无源蜂鸣器，PC7 的 TIM3_CH2 输出约 2730 Hz；直流有源蜂鸣器请设置为 1。 */
 #ifndef CLOCK_BUZZER_ACTIVE
 #define CLOCK_BUZZER_ACTIVE 0
 #endif

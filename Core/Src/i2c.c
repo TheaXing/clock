@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-/** I2C1 EEPROM: PB6/PB7; I2C2 AHT20: PB10/PB11; 100 kHz, external pull-ups. */
+/** I2C1 使用 PB6/PB7 连接 EEPROM；I2C2 使用 PB10/PB11 连接 AHT20；时钟均为 100 kHz，采用外部上拉。 */
 /* USER CODE END Header */
 #include "i2c.h"
 
@@ -9,93 +9,103 @@
 I2C_HandleTypeDef hi2c1;
 I2C_HandleTypeDef hi2c2;
 
-void MX_I2C1_Init(void)
-{
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-  {
-    Error_Handler();
-  }
+/**
+ * @brief 功能：以 100 kHz、七位地址模式初始化 EEPROM 使用的 I2C1。
+ * 参数：无。
+ * @retval 返回：无
+ */
+void MX_I2C1_Init(void) {
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.ClockSpeed = 100000;
+    hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
+        Error_Handler();
+    }
 }
 
-void MX_I2C2_Init(void)
-{
-  /* USER CODE BEGIN I2C2_Init 0 */
-  /* USER CODE END I2C2_Init 0 */
-  /* USER CODE BEGIN I2C2_Init 1 */
-  /* USER CODE END I2C2_Init 1 */
-  hi2c2.Instance = I2C2;
-  hi2c2.Init.ClockSpeed = 100000;
-  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c2.Init.OwnAddress1 = 0;
-  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c2.Init.OwnAddress2 = 0;
-  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN I2C2_Init 2 */
-  /* USER CODE END I2C2_Init 2 */
+/**
+ * @brief 功能：以 100 kHz、七位地址模式初始化 AHT20 使用的 I2C2。
+ * 参数：无。
+ * @retval 返回：无
+ */
+void MX_I2C2_Init(void) {
+    /* USER CODE BEGIN I2C2_Init 0 */
+    /* USER CODE END I2C2_Init 0 */
+    /* USER CODE BEGIN I2C2_Init 1 */
+    /* USER CODE END I2C2_Init 1 */
+    hi2c2.Instance = I2C2;
+    hi2c2.Init.ClockSpeed = 100000;
+    hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+    hi2c2.Init.OwnAddress1 = 0;
+    hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c2.Init.OwnAddress2 = 0;
+    hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c2) != HAL_OK) {
+        Error_Handler();
+    }
+    /* USER CODE BEGIN I2C2_Init 2 */
+    /* USER CODE END I2C2_Init 2 */
 }
 
-void HAL_I2C_MspInit(I2C_HandleTypeDef *i2cHandle)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  if (i2cHandle->Instance == I2C1)
-  {
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    __HAL_RCC_I2C1_CLK_ENABLE();
-  }
-  else if (i2cHandle->Instance == I2C2)
-  {
-    /* USER CODE BEGIN I2C2_MspInit 0 */
-    /* USER CODE END I2C2_MspInit 0 */
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    GPIO_InitStruct.Pin = GPIO_PIN_10 | GPIO_PIN_11;
-    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    GPIO_InitStruct.Alternate = GPIO_AF4_I2C2;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    __HAL_RCC_I2C2_CLK_ENABLE();
-    /* USER CODE BEGIN I2C2_MspInit 1 */
-    /* USER CODE END I2C2_MspInit 1 */
-  }
+/**
+ * @brief 功能：为 I2C1 或 I2C2 配置开漏复用引脚并开启外设时钟。
+ * 参数：
+ * @param i2c_handle 待初始化的 I2C 句柄。
+ * @retval 返回：无
+ */
+void HAL_I2C_MspInit(I2C_HandleTypeDef *i2c_handle) {
+    GPIO_InitTypeDef gpio_init = {0};
+    if (i2c_handle->Instance == I2C1) {
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+        gpio_init.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+        gpio_init.Mode = GPIO_MODE_AF_OD;
+        gpio_init.Pull = GPIO_NOPULL;
+        gpio_init.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        gpio_init.Alternate = GPIO_AF4_I2C1;
+        HAL_GPIO_Init(GPIOB, &gpio_init);
+        __HAL_RCC_I2C1_CLK_ENABLE();
+    } else if (i2c_handle->Instance == I2C2) {
+        /* USER CODE BEGIN I2C2_MspInit 0 */
+        /* USER CODE END I2C2_MspInit 0 */
+        __HAL_RCC_GPIOB_CLK_ENABLE();
+        gpio_init.Pin = GPIO_PIN_10 | GPIO_PIN_11;
+        gpio_init.Mode = GPIO_MODE_AF_OD;
+        gpio_init.Pull = GPIO_NOPULL;
+        gpio_init.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+        gpio_init.Alternate = GPIO_AF4_I2C2;
+        HAL_GPIO_Init(GPIOB, &gpio_init);
+        __HAL_RCC_I2C2_CLK_ENABLE();
+        /* USER CODE BEGIN I2C2_MspInit 1 */
+        /* USER CODE END I2C2_MspInit 1 */
+    }
 }
 
-void HAL_I2C_MspDeInit(I2C_HandleTypeDef *i2cHandle)
-{
-  if (i2cHandle->Instance == I2C1)
-  {
-    __HAL_RCC_I2C1_CLK_DISABLE();
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6 | GPIO_PIN_7);
-  }
-  else if (i2cHandle->Instance == I2C2)
-  {
-    /* USER CODE BEGIN I2C2_MspDeInit 0 */
-    /* USER CODE END I2C2_MspDeInit 0 */
-    __HAL_RCC_I2C2_CLK_DISABLE();
-    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10 | GPIO_PIN_11);
-    /* USER CODE BEGIN I2C2_MspDeInit 1 */
-    /* USER CODE END I2C2_MspDeInit 1 */
-  }
+/**
+ * @brief 功能：关闭指定 I2C 外设的时钟并释放对应引脚。
+ * 参数：
+ * @param i2c_handle 待反初始化的 I2C 句柄。
+ * @retval 返回：无
+ */
+void HAL_I2C_MspDeInit(I2C_HandleTypeDef *i2c_handle) {
+    if (i2c_handle->Instance == I2C1) {
+        __HAL_RCC_I2C1_CLK_DISABLE();
+        HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6 | GPIO_PIN_7);
+    } else if (i2c_handle->Instance == I2C2) {
+        /* USER CODE BEGIN I2C2_MspDeInit 0 */
+        /* USER CODE END I2C2_MspDeInit 0 */
+        __HAL_RCC_I2C2_CLK_DISABLE();
+        HAL_GPIO_DeInit(GPIOB, GPIO_PIN_10 | GPIO_PIN_11);
+        /* USER CODE BEGIN I2C2_MspDeInit 1 */
+        /* USER CODE END I2C2_MspDeInit 1 */
+    }
 }
 /* USER CODE BEGIN 1 */
 /* USER CODE END 1 */
