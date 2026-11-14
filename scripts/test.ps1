@@ -9,13 +9,18 @@ $testCommands = @(
     'BSP/OTA/tests/run_http_tests.ps1',
     'BSP/OTA/tests/run_boot_net_tests.ps1',
     'BSP/OTA/tests/run_boot_policy_tests.ps1',
+    'BSP/OTA/tests/run_boot_target_tests.ps1',
+    'BSP/OTA/tests/run_discovery_tests.ps1',
     'BSP/OTA/tests/run_app_tests.ps1'
 )
 foreach ($testCommand in $testCommands) {
     & (Join-Path $repoRoot $testCommand)
     if ($LASTEXITCODE -ne 0) { throw "Test failed: $testCommand" }
 }
-& node --test (Join-Path $repoRoot 'tools/ota/test_ota.mjs')
+& node --test (Join-Path $repoRoot 'tools/ota/test_ota.mjs') `
+    (Join-Path $repoRoot 'tools/ota/test_admin.mjs') `
+    (Join-Path $repoRoot 'tools/ota/test_build_support.mjs') `
+    (Join-Path $repoRoot 'tools/ota/test_discovery_config.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'OTA host tools failed.' }
 if ($IncludeLegacy) {
     $legacyRunner = Join-Path $repoRoot 'tests/run_host_tests.ps1'

@@ -19,10 +19,10 @@ static bool all_zero(const uint8_t *data, size_t length) {
 
 /**
  * 功能：严格读取包头结构与身份元数据，不验证发布者 HMAC。
- * 参数：header 为完整包头；installed 选择安装描述标记；out 为输出。仅限已经由 Boot 完整认证后运行中的应用调用，严禁用于 Boot 或安装授权。
+ * 参数：header 为完整包头；installed 选择安装描述标记；out 为输出。供显式可信读取、未认证提示与认证接口共用，不能单独授权安装。
  * 返回：结构、范围和身份字段合法时为真，失败不修改输出；成功不代表发布者认证通过。
  */
-bool ota_manifest_read_trusted(const uint8_t header[256], bool installed, ota_manifest_t *out) {
+static bool read_structure(const uint8_t header[256], bool installed, ota_manifest_t *out) {
     static const uint8_t magic[8] = {'C', 'L', 'K', 'O', 'T', 'A', '1', 0};
     static const uint8_t board[32] = "Clock_CubeMX-STM32F407VE";
     uint8_t digest[32];
@@ -50,11 +50,20 @@ bool ota_manifest_read_trusted(const uint8_t header[256], bool installed, ota_ma
     return true;
 }
 
+/** 功能：读取 Boot 已认证的当前安装描述；参数：包头、安装标志和输出；返回：结构合法为真，不执行 HMAC。 */
+bool ota_manifest_read_trusted(const uint8_t header[256], bool installed, ota_manifest_t *out) {
+    return read_structure(header, installed, out);
+}
+
+/** 功能：读取来自网络的未认证提示；参数：原始线上包头和输出；返回：仅结构及公开身份合法为真，严禁据此授权安装或擦除。 */
+bool ota_manifest_read_hint(const uint8_t header[256], ota_manifest_t *out) {
+    return read_structure(header, false, out);
+}
 /** 功能：严格解析并认证线上包头或已提交安装描述。参数：包头、发布密钥、安装标志和输出。返回：结构和 HMAC 均验证成功时为真，失败不修改输出。 */
 bool ota_manifest_parse(const uint8_t header[256], const uint8_t key[32], bool installed, ota_manifest_t *out) {
     ota_manifest_t parsed;
     uint8_t digest[32];
-    if (key == NULL || out == NULL || all_zero(key, 32) || !ota_manifest_read_trusted(header, installed, &parsed)) {
+    if (key == NULL || out == NULL || all_zero(key, 32) || !read_structure(header, installed, &parsed)) {
         return false;
     }
     ota_hmac_sha256(key, header, 192, digest);

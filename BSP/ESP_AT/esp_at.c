@@ -1169,16 +1169,9 @@ const char *esp_at_http_get_bounded(const char *url, uint32_t timeout_ms) {
         return NULL;
     }
     http_response[0] = '\0';
-    static const char prefix[] = "AT+HTTPCGET=\"";
-    memcpy(command_buffer, prefix, sizeof prefix);
-    bool ok = esp_at_quote(url, 512U, command_buffer + sizeof prefix - 1U,
-                           sizeof command_buffer - sizeof prefix - 40U);
+    bool ok = esp_at_build_http_get_bounded(url, timeout_ms, command_buffer, sizeof command_buffer);
     if (ok) {
-        size_t length = strlen(command_buffer);
-        int count = snprintf(command_buffer + length, sizeof command_buffer - length,
-                             "\",2048,2048,%lu\r\n", (unsigned long)timeout_ms);
-        ok = count > 0 && length + (size_t)count < 256U &&
-             exchange_locked(command_buffer, timeout_ms + 1000U, true, false) == ACK_OK &&
+        ok = exchange_locked(command_buffer, timeout_ms + 1000U, true, false) == ACK_OK &&
              esp_at_extract_http(response, http_response, sizeof http_response);
     }
     unlock_commands();

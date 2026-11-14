@@ -11,4 +11,19 @@
 #endif
 #endif
 #define CLOCK_OTA_VERSION 17U
+#ifndef CLOCK_OTA_AUTO_CHECK
+#define CLOCK_OTA_AUTO_CHECK CLOCK_OTA_ENABLED
+#endif
+#if defined(OTA_TEST_LONG_URL)
+#define CLOCK_OTA_HOST "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+#if defined(OTA_TEST_URL_ACCEPTED)
+#define CLOCK_OTA_PATH "/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+#else
+#define CLOCK_OTA_PATH "/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+#endif
+#else
+#define CLOCK_OTA_HOST "192.0.2.1"
+#define CLOCK_OTA_PATH "/firmware.ota"
+#endif
+#define CLOCK_OTA_PORT 8788U
 #endif

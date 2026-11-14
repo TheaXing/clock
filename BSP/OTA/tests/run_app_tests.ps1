@@ -6,8 +6,8 @@ $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer
 $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vsInstall) { throw 'MSVC C compiler is required.' }
 $devCmd = Join-Path $vsInstall 'Common7/Tools/VsDevCmd.bat'
-$includes = @('BSP/OTA/tests/app_stubs', 'app/ota', 'BSP/OTA', 'app/alarm', 'app', 'BSP/BL24C512', 'BSP/RTC') | ForEach-Object { '/I"' + (Join-Path $repoRoot $_) + '"' }
-$sources = @('BSP/OTA/tests/test_ota_service.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+$includes = @('BSP/OTA/tests/app_stubs', 'app/ota', 'BSP/OTA', 'app/alarm', 'app', 'BSP/BL24C512', 'BSP/RTC', 'BSP/ESP_AT') | ForEach-Object { '/I"' + (Join-Path $repoRoot $_) + '"' }
+$sources = @('BSP/OTA/tests/test_ota_service.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c', 'BSP/OTA/ota_discovery.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
 $command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX {1} {2} /Fo"{3}\\" /Fe"{3}/test_ota_service.exe"' -f $devCmd, ($includes -join ' '), ($sources -join ' '), $testBuild
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'OTA application compilation failed.' }
@@ -46,3 +46,31 @@ $command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DCLO
 if ($LASTEXITCODE -ne 0) { throw 'OTA UI progress hook tests failed.' }
 & node (Join-Path $PSScriptRoot 'app_web_ui_test.mjs')
 if ($LASTEXITCODE -ne 0) { throw 'OTA browser behavior tests failed.' }
+
+$resetSources = @('BSP/OTA/tests/test_ota_reset.c', 'app/ota/ota_reset.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX {1} {2} /Fo"{3}\\" /Fe"{3}/test_ota_reset.exe" && "{3}/test_ota_reset.exe"' -f $devCmd, ($includes -join ' '), ($resetSources -join ' '), $testBuild
+& $env:ComSpec /d /s /c $command
+if ($LASTEXITCODE -ne 0) { throw 'OTA reset snapshot tests failed.' }
+
+$autoSources = @('BSP/OTA/tests/test_ota_autocheck.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c', 'BSP/OTA/ota_discovery.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX {1} {2} /Fo"{3}\\" /Fe"{3}/test_ota_autocheck.exe"' -f $devCmd, ($includes -join ' '), ($autoSources -join ' '), $testBuild
+& $env:ComSpec /d /s /c $command
+if ($LASTEXITCODE -ne 0) { throw 'OTA automatic check compilation failed.' }
+foreach ($scenario in 1..28) {
+    & (Join-Path $testBuild 'test_ota_autocheck.exe') $scenario
+    if ($LASTEXITCODE -ne 0) { throw "OTA automatic check scenario $scenario failed." }
+}
+$noAutoSources = @('BSP/OTA/tests/app_no_auto_test.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c', 'BSP/OTA/ota_discovery.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DCLOCK_OTA_AUTO_CHECK=0 {1} {2} /Fo"{3}\\" /Fe"{3}/app_no_auto_test.exe" && "{3}/app_no_auto_test.exe"' -f $devCmd, ($includes -join ' '), ($noAutoSources -join ' '), $testBuild
+& $env:ComSpec /d /s /c $command
+if ($LASTEXITCODE -ne 0) { throw 'OTA explicit automatic check disable tests failed.' }
+$command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DOTA_TEST_NO_ADMIN {1} {2} /Fo"{3}\\" /Fe"{3}/app_auto_no_admin_test.exe" && "{3}/app_auto_no_admin_test.exe" 4' -f $devCmd, ($includes -join ' '), ($autoSources -join ' '), $testBuild
+& $env:ComSpec /d /s /c $command
+if ($LASTEXITCODE -ne 0) { throw 'OTA automatic check without manual admin token tests failed.' }
+$longUrlSources = @('BSP/OTA/tests/app_long_url_test.c', 'app/ota/ota_service.c', 'BSP/OTA/ota_crypto.c', 'BSP/OTA/ota_discovery.c') | ForEach-Object { '"' + (Join-Path $repoRoot $_) + '"' }
+foreach ($accepted in @($false, $true)) {
+    $define = if ($accepted) { '/DOTA_TEST_URL_ACCEPTED' } else { '' }
+    $command = '"{0}" -no_logo -arch=x64 && cl /nologo /utf-8 /std:c11 /W4 /WX /DOTA_TEST_LONG_URL {1} {2} {3} /Fo"{4}\\" /Fe"{4}/app_long_url_test.exe" && "{4}/app_long_url_test.exe"' -f $devCmd, $define, ($includes -join ' '), ($longUrlSources -join ' '), $testBuild
+    & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) { throw 'OTA discovery runtime URL boundary tests failed.' }
+}

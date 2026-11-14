@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Clock OTA · 固件发布</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Clock OTA 首页"><span class="brand-mark" aria-hidden="true">C<span></span></span><span>CLOCK<span class="brand-sub">OTA CONSOLE</span></span></a>
+    <div class="side-label">工作空间</div>
+    <div class="nav-item"><span aria-hidden="true">◈</span> 固件发布 <span class="nav-arrow" aria-hidden="true">↗</span></div>
+    <div class="sidebar-bottom"><span class="small-dot"></span> 局域网服务<div>STM32F407 · 安全认证包</div></div>
+  </aside>
+  <main>
+    <header class="topbar"><div>设备维护 <span class="separator">/</span> <strong>固件发布</strong></div><div class="topbar-actions"><span class="local-pill"><span class="small-dot"></span> 本地部署</span><button id="logout" class="text-button" hidden>退出管理</button></div></header>
+    <div class="content">
+      <div class="page-heading"><div><div class="eyebrow">FIRMWARE RELEASES</div><h1>把新版本，交给下一次开机。</h1><p>上传认证固件，确认发布。设备联网后自动发现更新。</p></div><span class="hardware-label">CLOCK / F407VE</span></div>
+
+      <section id="login-panel" class="login-layout" aria-labelledby="login-title">
+        <div class="intro-panel"><div class="intro-symbol" aria-hidden="true">↗</div><div class="eyebrow">一份固件，三个步骤</div><h2>从构建到时钟，<br>每一步都清楚。</h2><ol class="workflow"><li><span>01</span><div><strong>构建并签名</strong><p>使用构建脚本生成 .ota 认证包。</p></div></li><li><span>02</span><div><strong>上传，再确认发布</strong><p>服务端验证通过后，固件先保留为暂存。</p></div></li><li><span>03</span><div><strong>设备开机检查</strong><p>联网且健康确认后，发现更高版本并排队更新。</p></div></li></ol><div class="intro-foot">签名验证 <span>·</span> 固定包身份 <span>·</span> 保留历史版本</div></div>
+        <form id="login-form" class="login-card"><div class="card-kicker">管理访问</div><h2 id="login-title">进入发布工作台</h2><p class="muted">输入本地密钥文件中的管理令牌。<br>令牌仅保存在本次页面内存中。</p><label for="token">管理令牌 <span>adminTokenHex</span></label><input id="token" type="password" maxlength="64" autocomplete="off" spellcheck="false" required placeholder="64 位十六进制令牌" aria-describedby="login-help"><p id="login-help" class="field-help">在 app/ota_key_local.json 中查找，勿使用 keyHex。</p><button id="login-submit" class="primary-button" type="submit">进入后台 <span aria-hidden="true">→</span></button><p id="login-status" class="form-status" role="status"></p><div class="privacy-note">此服务用于电脑 / 局域网。请保持服务运行，以便设备检查与下载。</div></form>
+      </section>
+
+      <div id="workspace" hidden>
+        <section class="release-hero" aria-labelledby="current-title"><div class="release-hero-main"><div class="hero-kicker"><span class="small-dot"></span> 当前发布</div><h2 id="current-title">尚未发布固件</h2><p id="current-description">上传一份认证包，确认发布后即可被设备发现。</p><div id="current-meta" class="hero-meta" hidden></div></div><div class="hero-version" id="current-version" aria-hidden="true">—<small>READY WHEN YOU ARE</small></div></section>
+        <div id="global-status" class="notice" role="status" hidden></div>
+        <div class="workspace-grid"><section class="panel upload-panel" aria-labelledby="upload-title"><div class="section-heading"><div><div class="card-kicker">01 / 暂存固件</div><h2 id="upload-title">上传认证包</h2></div><span class="outline-badge">.ota</span></div><label id="drop-zone" class="drop-zone" for="package-file" tabindex="0"><span class="upload-icon" aria-hidden="true">↑</span><strong>拖入固件，或点击选择</strong><span>仅接受 .ota · 最大 448 KiB</span><input id="package-file" type="file" accept=".ota" hidden></label><div id="upload-detail" class="upload-detail" hidden><div class="file-summary"><strong id="upload-name"></strong><span id="upload-size"></span></div><progress id="upload-progress" max="100" value="0" aria-label="上传进度"></progress></div><p id="upload-status" class="upload-status" role="status">上传成功仅代表暂存，请在版本列表中确认发布。</p><p class="panel-note">版本与板型来自包内认证头；后台不会修改或重新签名固件。</p></section>
+        <section class="panel steps-panel" aria-labelledby="flow-title"><div class="card-kicker">发布须知</div><h2 id="flow-title">确认之后，才会更新。</h2><div class="flow-line"><span class="flow-stage">已上传</span><span aria-hidden="true">→</span><span class="flow-stage active">已发布</span><span aria-hidden="true">→</span><span class="flow-stage">开机检查</span></div><p>设备只自动处理比当前版本更新的固件；离线时继续运行时钟。</p><p>已开始的安装保持原包身份，切换发布不会替换正在下载的内容。</p><div class="information-line"><span aria-hidden="true">i</span> 后台不采集设备安装结果。</div></section></div>
+        <section class="panel versions-panel" aria-labelledby="versions-title"><div class="section-heading"><div><div class="card-kicker">02 / 确认发布</div><h2 id="versions-title">版本库 <span id="release-count" class="count-badge">0</span></h2></div><div class="version-actions"><span id="storage-summary" class="muted"></span><button id="refresh" class="secondary-button">刷新列表</button></div></div><div id="empty-state" class="empty-state"><span aria-hidden="true">◇</span><h3>第一份固件，从这里开始</h3><p>上传构建脚本生成的 .ota 文件，认证通过后会显示在这里。</p></div><div id="release-list" class="release-list"></div><div class="library-footer"><span class="small-dot"></span> 历史包持续保留，用于固定版本下载与中断恢复。</div></section>
+      </div>
+      <footer class="page-footer"><span>CLOCK OTA <span class="footer-divider">/</span> 本地固件工作台</span><span>认证上传 · 明确发布 · 开机发现</span></footer>
+    </div>
+  </main>
+  <dialog id="publish-dialog" aria-labelledby="publish-title"><form method="dialog"><div class="card-kicker">发布确认</div><h2 id="publish-title">发布此版本？</h2><p id="publish-description"></p><div class="confirmation-note">发布后，联网设备会在正常开机检查时发现更高版本。自动设备不会降级，已开始的安装不会取消。</div><div id="publish-error" class="form-status" role="status"></div><div class="dialog-actions"><button id="publish-cancel" class="secondary-button" value="cancel">再检查一下</button><button id="publish-confirm" class="primary-button" type="button">确认发布</button></div></form></dialog>
+</body>
+</html>

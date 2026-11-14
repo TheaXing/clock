@@ -51,6 +51,8 @@ bool esp_at_sntp_get_time(esp_date_time_t *date);
 const char *esp_at_http_get(const char *url);
 /* 使用 ESP-AT 4.1 HTTPCGET 并设置模块端网络超时，共享上述 HTTP 快照生命周期；timeout_ms 范围为 100～3000 毫秒。 */
 const char *esp_at_http_get_bounded(const char *url, uint32_t timeout_ms);
+#define ESP_HTTP_COMMAND_MAX 255U
+#define ESP_HTTP_BOUNDED_URL_MAX_1000_MS (ESP_HTTP_COMMAND_MAX - 31U)
 
 #define ESP_SERVER_CHUNK_CAPACITY 256U
 

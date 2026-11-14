@@ -1,6 +1,25 @@
 #include "esp_at_parse.h"
 
 #include <string.h>
+#include <stdio.h>
+
+/** 功能：构造实际有界 HTTP 命令并校验模块的 255 字节上限；参数：URL、超时、输出和容量；返回：完整转义命令可用为真。 */
+bool esp_at_build_http_get_bounded(const char *url, uint32_t timeout_ms, char *output, size_t capacity) {
+    static const char prefix[] = "AT+HTTPCGET=\"";
+    size_t length;
+    int count;
+    if (url == NULL || url[0] == '\0' || output == NULL || capacity <= sizeof prefix ||
+        timeout_ms < 100U || timeout_ms > 3000U) {
+        return false;
+    }
+    memcpy(output, prefix, sizeof prefix - 1U);
+    if (!esp_at_quote(url, 512U, output + sizeof prefix - 1U, capacity - sizeof prefix + 1U)) {
+        return false;
+    }
+    length = strlen(output);
+    count = snprintf(output + length, capacity - length, "\",2048,2048,%lu\r\n", (unsigned long)timeout_ms);
+    return count > 0 && (size_t)count < capacity - length && length + (size_t)count <= ESP_HTTP_COMMAND_MAX;
+}
 
 /**
  * 功能：在多行应答中查找位于行首的指定前缀。

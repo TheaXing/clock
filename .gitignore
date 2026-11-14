@@ -1,5 +1,6 @@
 # Build output and CubeMX scratch files
 /build/
+/.ota-data/
 /mx.scratch
 /.vscode/
 

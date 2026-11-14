@@ -10,9 +10,11 @@ int main(void) {
     ota_service_start();
     ota_service_heartbeat(OTA_HEARTBEAT_ALL);
     ota_service_network_poll(UINT32_MAX);
+    ota_service_autocheck_poll(true, UINT32_MAX);
     ota_service_status(status, sizeof status, 99U);
     assert(strstr(status, "\"enabled\":false") != NULL);
     assert(strstr(status, "\"state\":\"disabled\"") != NULL);
+    assert(strstr(status, "\"autoEnabled\":false") != NULL);
     assert(ota_service_request("session=99&token=bad", 99U) == 503);
     puts("OTA disabled application passed");
     return 0;

@@ -146,6 +146,11 @@ static void heartbeat(void *unused) {
               (unsigned long)uxTaskGetStackHighWaterMark(clock_task),
               (unsigned long)uxTaskGetStackHighWaterMark(sensor_task),
               (unsigned long)uxTaskGetStackHighWaterMark(network_task));
+#if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
+    char ota_status[384];
+    ota_service_status(ota_status, sizeof ota_status, 0U);
+    clock_log("OTA %s\r\n", ota_status);
+#endif
 }
 
 /**
@@ -362,6 +367,7 @@ static void network_loop(void *unused) {
 #if defined(CLOCK_OTA_ENABLED) && CLOCK_OTA_ENABLED
         /* 网页处理函数已发送完响应并关闭连接；此处是唯一允许复位的网络边界。 */
         ota_service_network_poll((uint32_t)xTaskGetTickCount());
+        ota_service_autocheck_poll(connected, (uint32_t)xTaskGetTickCount());
 #endif
         if (connected &&
             elapsed(now, last_sync, synced ? CLOCK_SYNC_INTERVAL_MS : CLOCK_SYNC_RETRY_MS)) {

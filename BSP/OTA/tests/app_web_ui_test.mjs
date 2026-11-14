@@ -13,6 +13,7 @@ let session = 123;
 let version = 17;
 let postStatus = 202;
 let confirmed = 0;
+let autoState = 'waiting';
 
 function element(id) {
   if (!elements.has(id)) {
@@ -41,13 +42,19 @@ const context = vm.createContext({
       if (postStatus === 202) stage = 'queued';
       return { ok: postStatus < 400, status: postStatus, json: async () => ({ id: 1, state: stage }) };
     }
-    return { ok: true, status: 200, json: async () => ({ enabled: true, session, version, identity: 'test-package', id: 1, state: stage, error: 3 }) };
+    return { ok: true, status: 200, json: async () => ({ enabled: true, session, version, identity: 'test-package', id: 1, state: stage, error: 3, autoEnabled: true, autoState, autoChecks: 1 }) };
   },
 });
 vm.runInContext(script, context);
 for (let index = 0; index < 60; ++index) await Promise.resolve();
 assert.equal(element('otaStart').disabled, false);
 assert.match(element('otaVersion').textContent, /17/);
+assert.match(element('otaAuto').textContent, /等待联网/);
+for (const [state, expected] of [['health', /等待设备健康确认/], ['checking', /检查中/], ['current', /已是最新/], ['busy', /设备忙/], ['queued', /已排队/], ['unreachable', /后台不可达/], ['failed', /自动升级请求未保存/], ['blocked', /本次启动暂不自动升级/]]) {
+  autoState = state;
+  await vm.runInContext('loadOta()', context);
+  assert.match(element('otaAuto').textContent, expected);
+}
 element('otaToken').value = 'ab'.repeat(32);
 await vm.runInContext('startOta()', context);
 assert.equal(confirmed, 1);

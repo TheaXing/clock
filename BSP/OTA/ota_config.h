@@ -31,6 +31,12 @@
 #define CLOCK_OTA_PATH ""
 #define CLOCK_OTA_VERSION 0U
 #endif
+#ifndef CLOCK_OTA_AUTO_CHECK
+#define CLOCK_OTA_AUTO_CHECK CLOCK_OTA_ENABLED
+#endif
+#if !CLOCK_OTA_ENABLED && CLOCK_OTA_AUTO_CHECK
+#error "Automatic OTA requires an OTA application build"
+#endif
 
 /** 功能：解码非零32字节密钥；参数：十六进制文本和输出；返回：有效为真。 */
 static inline bool ota_config_decode_hex(const char *hex, uint8_t out[32]) {

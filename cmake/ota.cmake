@@ -31,8 +31,9 @@ if(OTA_HOST_LENGTH GREATER 64 OR NOT OTA_HOST_VALUE MATCHES "^[a-zA-Z0-9.-]+$")
     message(FATAL_ERROR "OTA recovery host must be an ASCII hostname/IPv4 address up to 64 bytes")
 endif()
 string(LENGTH "${OTA_PATH_VALUE}" OTA_PATH_LENGTH)
-if(OTA_PATH_LENGTH GREATER 192 OR NOT OTA_PATH_VALUE MATCHES "^/[^ \r\n\"]+$")
-    message(FATAL_ERROR "OTA package path is invalid")
+if(OTA_PATH_LENGTH GREATER 156 OR NOT OTA_PATH_VALUE MATCHES "^/[a-zA-Z0-9._/-]+$" OR
+   OTA_PATH_VALUE MATCHES "//|/\\.\\.?(/|$)")
+    message(FATAL_ERROR "OTA package path must be an ASCII path up to 156 bytes without queries or traversal")
 endif()
 foreach(OTA_FIELD PORT VERSION)
     string(REGEX MATCH "#define[ \t]+CLOCK_OTA_${OTA_FIELD}[ \t]+([0-9]+)" OTA_FIELD_MATCH "${OTA_CONFIG_CONTENT}")
@@ -44,10 +45,15 @@ endforeach()
 if(OTA_PORT_VALUE GREATER 65535 OR OTA_VERSION_VALUE GREATER 4294967295)
     message(FATAL_ERROR "OTA port/version is out of range")
 endif()
+set(OTA_DISCOVERY_URL "http://${OTA_HOST_VALUE}:${OTA_PORT_VALUE}${OTA_PATH_VALUE}?latest=1")
+string(LENGTH "${OTA_DISCOVERY_URL}" OTA_DISCOVERY_URL_LENGTH)
+if(OTA_DISCOVERY_URL_LENGTH GREATER 224)
+    message(FATAL_ERROR "OTA discovery URL must be at most 224 ASCII bytes for the 255-byte HTTPCGET command")
+endif()
 file(TO_CMAKE_PATH "${CLOCK_OTA_CONFIG_FILE}" OTA_CONFIG_INCLUDE)
 set(OTA_COMMON
     BSP/OTA/ota_crypto.c BSP/OTA/ota_image.c BSP/OTA/ota_journal.c)
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${OTA_COMMON})
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${OTA_COMMON} BSP/OTA/ota_discovery.c)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE CLOCK_OTA_CONFIG_HEADER="${OTA_CONFIG_INCLUDE}")
 target_compile_definitions(STM32_Drivers PRIVATE USER_VECT_TAB_ADDRESS VECT_TAB_OFFSET=0x10000U)
 target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-T${CMAKE_SOURCE_DIR}/bootloader/app.ld")
@@ -58,7 +64,7 @@ foreach(BOOT_DRIVER hal hal_cortex hal_gpio hal_rcc hal_rcc_ex hal_pwr hal_pwr_e
 endforeach()
 add_executable(Clock_Bootloader
     bootloader/startup.s bootloader/main.c bootloader/boot_platform.c
-    bootloader/boot_net.c bootloader/boot_policy.c
+    bootloader/boot_net.c bootloader/boot_policy.c bootloader/boot_target.c
     Core/Src/system_stm32f4xx.c ${BOOT_HAL} ${OTA_COMMON}
     BSP/OTA/ota_installer.c BSP/OTA/ota_http.c)
 target_link_libraries(Clock_Bootloader PRIVATE stm32cubemx)

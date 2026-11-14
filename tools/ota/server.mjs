@@ -28,15 +28,52 @@ function parseRange(range, length) {
   return [first, Math.min(last ?? length - 1, length - 1)];
 }
 
+export function packageQuery(url, path) {
+  if (url === path) { return { kind: 'alias' }; }
+  if (url === `${path}?latest=1`) { return { kind: 'latest' }; }
+  if (url?.startsWith(`${path}?id=`) && /^[0-9a-f]{32}$/.test(url.slice(path.length + 4))) {
+    return { kind: 'id', packageId: url.slice(path.length + 4) };
+  }
+  return null;
+}
+
+export function respondPackage(req, res, snapshot, etag) {
+  res.setHeader('ETag', etag);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  if (req.headers['if-match'] !== undefined && req.headers['if-match'] !== etag) {
+    res.writeHead(412, { 'Content-Length': 0 });
+    res.end();
+    return;
+  }
+  let first = 0;
+  let last = snapshot.length - 1;
+  let status = 200;
+  if (req.headers.range !== undefined) {
+    const range = parseRange(req.headers.range, snapshot.length);
+    if (!range) {
+      res.writeHead(416, { 'Content-Range': `bytes */${snapshot.length}`, 'Content-Length': 0 });
+      res.end();
+      return;
+    }
+    [first, last] = range;
+    status = 206;
+    res.setHeader('Content-Range', `bytes ${first}-${last}/${snapshot.length}`);
+  }
+  res.writeHead(status, { 'Content-Length': last - first + 1 });
+  res.end(req.method === 'HEAD' ? undefined : snapshot.subarray(first, last + 1));
+}
+
 export function createOtaServer({ packageBytes, key, path = '/firmware.ota' }) {
   validatePackagePath(path);
-  verifyPackage(packageBytes, key);
+  const manifest = verifyPackage(packageBytes, key);
   const snapshot = Buffer.from(packageBytes);
   const etag = `"${createHash('sha256').update(snapshot).digest('hex')}"`;
   const server = createServer({ maxHeaderSize: 4096 }, (req, res) => {
     res.setHeader('Connection', 'close');
     res.setHeader('Cache-Control', 'no-store');
-    if (req.url !== path) {
+    const query = packageQuery(req.url, path);
+    if (!query || (query.kind === 'id' && query.packageId !== manifest.id.toString('hex'))) {
       res.writeHead(404, { 'Content-Length': 0 });
       res.end();
       return;
@@ -46,30 +83,13 @@ export function createOtaServer({ packageBytes, key, path = '/firmware.ota' }) {
       res.end();
       return;
     }
-    res.setHeader('ETag', etag);
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('Content-Type', 'application/octet-stream');
-    if (req.headers['if-match'] !== undefined && req.headers['if-match'] !== etag) {
-      res.writeHead(412, { 'Content-Length': 0 });
-      res.end();
+    if (query.kind === 'latest') {
+      const body = Buffer.from(JSON.stringify({ available: true, version: manifest.version, packageId: manifest.id.toString('hex'), header: manifest.header.toString('hex') }));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': body.length });
+      res.end(req.method === 'HEAD' ? undefined : body);
       return;
     }
-    let first = 0;
-    let last = snapshot.length - 1;
-    let status = 200;
-    if (req.headers.range !== undefined) {
-      const range = parseRange(req.headers.range, snapshot.length);
-      if (!range) {
-        res.writeHead(416, { 'Content-Range': `bytes */${snapshot.length}`, 'Content-Length': 0 });
-        res.end();
-        return;
-      }
-      [first, last] = range;
-      status = 206;
-      res.setHeader('Content-Range', `bytes ${first}-${last}/${snapshot.length}`);
-    }
-    res.writeHead(status, { 'Content-Length': last - first + 1 });
-    res.end(req.method === 'HEAD' ? undefined : snapshot.subarray(first, last + 1));
+    respondPackage(req, res, snapshot, etag);
   });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;

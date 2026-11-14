@@ -13,5 +13,6 @@ bool esp_at_extract_http(const char *response, char *body, size_t capacity);
 bool esp_at_quote(const char *input, size_t max_input, char *output, size_t capacity);
 bool esp_at_valid_mac(const char *mac);
 bool esp_at_parse_station_ip(const char *response, char ip[16]);
+bool esp_at_build_http_get_bounded(const char *url, uint32_t timeout_ms, char *output, size_t capacity);
 
 #endif

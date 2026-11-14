@@ -11,6 +11,8 @@
 #include "alarm_service.h"
 #include "task.h"
 #include "queue.h"
+#include "ota_discovery.h"
+#include "ota_config.h"
 
 /** 保存虚拟任务的入口与参数。 */
 typedef struct {
@@ -28,6 +30,29 @@ static uint32_t tick;
 static uint32_t load_delay;
 static alarm_maintenance_state_t gate;
 static ota_record_t persisted;
+static bool software_reset, editing;
+static uint8_t snapshot_busy;
+static unsigned http_checks;
+static const char *http_response;
+
+/** 功能：模拟初始化时快照并清除复位原因；参数：无；返回：是否软件复位。 */
+bool ota_reset_was_software(void) {
+    return software_reset;
+}
+
+/** 功能：模拟明确正常启动的适配结果；参数：无；返回：是否正常复位。 */
+bool ota_reset_is_normal_boot(void) {
+    return !software_reset;
+}
+
+/** 功能：模拟唯一网络所有者的有界 HTTP；参数：URL 和超时；返回：公开正文或空指针。 */
+const char *esp_at_http_get_bounded(const char *url, uint32_t timeout_ms) {
+    assert(strcmp(url, "http://" CLOCK_OTA_HOST ":8788" CLOCK_OTA_PATH "?latest=1") == 0);
+    assert(timeout_ms >= 100U && timeout_ms <= 3000U);
+    assert(!lock_held);
+    ++http_checks;
+    return http_response;
+}
 
 /** 功能：运行工作任务直到再次等待队列；参数：无；返回：无。 */
 static void run_worker(void) {
@@ -139,6 +164,12 @@ bool bl24c512_write(uint32_t address, const void *data, size_t length) {
 /** 功能：提供虚拟的健康本地服务；参数：snapshot，输出快照；返回：是否可用。 */
 bool alarm_service_snapshot(alarm_service_snapshot_t *snapshot) {
     memset(snapshot, 0, sizeof *snapshot);
+    snapshot->local_editing = editing;
+    snapshot->saving = (snapshot_busy & 1U) != 0U;
+    snapshot->ringing_mask = (snapshot_busy & 2U) != 0U ? 1U : 0U;
+    snapshot->snoozed_mask = (snapshot_busy & 4U) != 0U ? 1U : 0U;
+    snapshot->test_ringing = (snapshot_busy & 8U) != 0U;
+    snapshot->test_pending = (snapshot_busy & 16U) != 0U;
     return !unavailable;
 }
 
@@ -202,6 +233,11 @@ bool ota_manifest_read_trusted(const uint8_t header[256], bool installed,
     memcpy(out->id, header + 96U, 16U);
     out->version = header[24];
     return true;
+}
+
+/** 功能：模拟明确未认证的网络元数据读取；参数：包头和输出；返回：是否结构可读。 */
+bool ota_manifest_read_hint(const uint8_t header[256], ota_manifest_t *out) {
+    return ota_manifest_read_trusted(header, false, out);
 }
 
 /** 功能：记录网络任务触发的复位；参数：无；返回：无。 */

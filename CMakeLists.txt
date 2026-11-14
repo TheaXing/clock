@@ -82,6 +82,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     BSP/ESP_AT/esp_at_parse.c
     BSP/ST7789/st7789.c
     app/ota/ota_service.c
+    app/ota/ota_reset.c
 )
 
 # 旧版 Keil 页面和资源统一以 UTF-8 读入，保留原有 GBK 字符串执行字节。

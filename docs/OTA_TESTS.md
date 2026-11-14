@@ -2,6 +2,8 @@
 
 本功能针对 STM32F407VET6、现有 ESP32-C3 MINI-1/ESP-AT 4.1.1 和 BL24C512，不增加硬件。不自动烧录，不修改选项字节。首次上板仍需通过已有 SWD 工具安装工厂 HEX。
 
+局域网管理后台、统一构建脚本和开机自动检查的最新流程见 [局域网 OTA 后台操作说明](OTA_ADMIN_TESTS.md)。下文保留底层分区、人工工具和恢复机制说明。
+
 ## 模式与限制
 
 普通 `Debug`/`Release` 仍为原地址独立应用。只有 `-Ota` 或 OtaDebug/OtaRelease 构建包含重定位应用和 Bootloader。IAR OTA 构建尚不支持，启用时明确报错；IAR 独立链接范围修正为 VE 的 512 KiB，不能用旧入口的 BIN 打 OTA 包。

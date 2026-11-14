@@ -1,5 +1,6 @@
 #include "boot_platform.h"
 #include "boot_policy.h"
+#include "boot_target.h"
 #include "ota_config.h"
 #include "ota_image.h"
 #include "clock_config.h"
@@ -94,11 +95,20 @@ int main(void) {
         boot_net_io_t net_io = boot_platform_net_io();
         uint8_t header[256];
         ota_manifest_t manifest;
-        bool ready = boot_net_connect(&network, &net_io, CLOCK_WIFI_SSID, CLOCK_WIFI_PASSWORD,
-                                      CLOCK_OTA_HOST, (uint16_t)CLOCK_OTA_PORT, CLOCK_OTA_PATH);
+        ota_manifest_t current;
+        ota_record_t saved;
+        boot_target_t target;
+        ota_store_result_t status = ota_journal_load(&journal, &saved);
+        bool current_valid = installed_image(&current);
+        bool ready = boot_target_select(status, &saved, current_valid ? &current : NULL,
+                                         release_key, forced, CLOCK_OTA_PATH, &target) &&
+            boot_net_connect(&network, &net_io, CLOCK_WIFI_SSID, CLOCK_WIFI_PASSWORD,
+                             CLOCK_OTA_HOST, (uint16_t)CLOCK_OTA_PORT, target.path);
         if (ready && boot_net_manifest(&network, header) &&
             ota_manifest_parse(header, release_key, false, &manifest) &&
-            network.total == OTA_HEADER_SIZE + manifest.image_size && candidate_allowed(&manifest, forced)) {
+            network.total == OTA_HEADER_SIZE + manifest.image_size && candidate_allowed(&manifest, forced) &&
+            boot_target_pin(&target, CLOCK_OTA_PATH, &manifest)) {
+            network.path = target.path;
             boot_platform_log("[BOOT] Authenticated package; committing installation permit\r\n");
             ota_record_t record;
             memset(&record, 0, sizeof record);

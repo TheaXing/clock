@@ -8,6 +8,11 @@
 #include "ota_crypto.h"
 #include "ota_image.h"
 #include "ota_journal.h"
+#include "ota_discovery.h"
+#include "ota_reset.h"
+#if CLOCK_OTA_AUTO_CHECK
+#include "esp_at.h"
+#endif
 #include "alarm_service.h"
 #include "bl24c512.h"
 #include "FreeRTOS.h"
@@ -21,8 +26,27 @@
 
 typedef enum {
     OTA_JOB_REQUEST,
-    OTA_JOB_CONFIRM
+    OTA_JOB_CONFIRM,
+    OTA_JOB_AUTO
+} ota_job_kind_t;
+
+/** 保存完整工作副本，排队后不引用网络缓冲区。 */
+typedef struct {
+    ota_job_kind_t kind; // 人工请求、健康确认或自动请求
+    uint8_t manifest[256]; // 自动候选原始包头，其他工作保持全零
 } ota_job_t;
+
+typedef enum {
+    OTA_AUTO_WAITING,
+    OTA_AUTO_HEALTH,
+    OTA_AUTO_CHECKING,
+    OTA_AUTO_CURRENT,
+    OTA_AUTO_BUSY,
+    OTA_AUTO_QUEUED,
+    OTA_AUTO_UNREACHABLE,
+    OTA_AUTO_FAILED,
+    OTA_AUTO_BLOCKED
+} ota_auto_state_t;
 
 typedef enum {
     OTA_REQUEST_IDLE,
@@ -45,12 +69,25 @@ static struct {
     bool reset_sent; // 是否已执行复位动作
     bool health_tracking; // 三个本地服务是否处于连续健康窗口
     uint8_t heartbeat_seen; // 本次健康窗口已经观测到的来源位
+    ota_auto_state_t auto_state; // 与人工请求独立的开机检查阶段
+    uint8_t auto_checks; // 本次启动已经执行的有界 HTTP 次数
+    uint32_t auto_check_ms; // 上次 HTTP 完成的时刻
+    bool auto_ready; // 已确认当前日志允许自动请求
+    bool auto_finished; // 本次启动不再发现或提交自动请求
+    bool auto_candidate; // 是否已经保留候选用于延后维护准入
+    bool auto_job; // 当前持久化请求是否来自自动检查
+    bool retry_previous; // 新正常启动是否可替换已明确预检失败的自动请求
+    bool normal_reset; // 初始化快照是否明确来自电源或外部复位
 } service;
 static QueueHandle_t jobs;
 static uint8_t admin_token_digest[32];
 static bool admin_enabled;
 static ota_manifest_t current_manifest;
 static bool current_valid;
+#if CLOCK_OTA_AUTO_CHECK
+static ota_manifest_t auto_candidate;
+#endif
+static uint8_t retry_manifest[256];
 
 /** 功能：在临界区内判断全部本地进展是否新鲜；参数：now_ms，当前毫秒；返回：全部满足时返回真。 */
 static bool heartbeats_fresh(uint32_t now_ms) {
@@ -210,11 +247,39 @@ static void fail_request(uint32_t error) {
     taskENTER_CRITICAL();
     service.error = error;
     service.state = OTA_REQUEST_FAILED;
+    if (service.auto_job) {
+        service.auto_state = OTA_AUTO_FAILED;
+        service.auto_finished = true;
+    }
     taskEXIT_CRITICAL();
 }
 
-/** 功能：等待所有者完成维护准入，随后在完整 EEPROM 事务内保存请求；参数：无；返回：无。 */
-static void persist_request(void) {
+/** 功能：比较日志中的已安装身份与当前镜像；参数：record，日志；返回：完整安装身份一致为真。 */
+static bool record_matches_current(const ota_record_t *record) {
+    ota_manifest_t parsed;
+    bool installed = record->manifest[252] == (uint8_t)(OTA_FOOTER_COMMIT & 0xffU);
+    return current_valid && ota_manifest_read_trusted(record->manifest, installed, &parsed) &&
+           ota_constant_equal(parsed.raw, current_manifest.raw, 252U) &&
+           ota_constant_equal(parsed.id, current_manifest.id, sizeof parsed.id);
+}
+
+/** 功能：判断新正常启动能否重试明确预检失败的旧自动请求；参数：record，日志；返回：满足例外为真。 */
+static bool previous_auto_failed(const ota_record_t *record) {
+    ota_manifest_t previous;
+    return service.normal_reset && current_valid && record->state == OTA_STATE_REQUESTED &&
+           record->error == 1U && ota_manifest_read_hint(record->manifest, &previous) &&
+           previous.version > current_manifest.version;
+}
+
+/** 功能：持锁重新校验自动请求的当前身份和失败重试例外；参数：record，日志；返回：允许提交为真。 */
+static bool auto_record_allowed(const ota_record_t *record) {
+    return (record->state == OTA_STATE_CONFIRMED && record_matches_current(record)) ||
+           (service.retry_previous && previous_auto_failed(record) &&
+            ota_constant_equal(record->manifest, retry_manifest, 256U));
+}
+
+/** 功能：等待维护准入并在完整事务中保存人工或自动请求；参数：job，独立候选副本；返回：无。 */
+static void persist_request(const ota_job_t *job) {
     ota_record_t record;
     ota_store_result_t result;
     ota_journal_io_t io = {read_eeprom, write_eeprom, NULL};
@@ -226,6 +291,15 @@ static void persist_request(void) {
         state = alarm_service_maintenance_state();
     }
     if (state != ALARM_MAINTENANCE_ACTIVE) {
+        if (job->kind == OTA_JOB_AUTO) {
+            alarm_service_maintenance_release();
+            taskENTER_CRITICAL();
+            service.state = OTA_REQUEST_IDLE;
+            service.auto_state = OTA_AUTO_BUSY;
+            service.auto_job = false;
+            taskEXIT_CRITICAL();
+            return;
+        }
         fail_request(1U);
         return;
     }
@@ -234,11 +308,24 @@ static void persist_request(void) {
         return;
     }
     result = ota_journal_load(&io, &record);
+    if (result == OTA_STORE_OK && job->kind == OTA_JOB_AUTO) {
+        ota_manifest_t candidate;
+        if (!local_health_ready((uint32_t)xTaskGetTickCount()) ||
+            alarm_service_maintenance_state() != ALARM_MAINTENANCE_ACTIVE ||
+            !auto_record_allowed(&record) || !ota_manifest_read_hint(job->manifest, &candidate) ||
+            candidate.version <= current_manifest.version) {
+            result = OTA_STORE_INVALID;
+        }
+    }
     if (result == OTA_STORE_OK && record.state != OTA_STATE_INSTALLING) {
         record.state = OTA_STATE_REQUESTED;
         record.attempts = 0U;
         record.error = 0U;
-        memset(record.manifest, 0, sizeof record.manifest);
+        if (job->kind == OTA_JOB_AUTO) {
+            memcpy(record.manifest, job->manifest, sizeof record.manifest);
+        } else {
+            memset(record.manifest, 0, sizeof record.manifest);
+        }
         result = ota_journal_save(&io, &record);
     } else if (result == OTA_STORE_OK) {
         result = OTA_STORE_INVALID;
@@ -252,6 +339,10 @@ static void persist_request(void) {
     service.saved_ms = (uint32_t)xTaskGetTickCount();
     service.state = OTA_REQUEST_SAVED;
     service.error = 0U;
+    if (job->kind == OTA_JOB_AUTO) {
+        service.auto_state = OTA_AUTO_QUEUED;
+        service.auto_finished = true;
+    }
     taskEXIT_CRITICAL();
 }
 
@@ -293,6 +384,21 @@ static bool confirm_running_image(void) {
         record.error = 0U;
         result = ota_journal_save(&io, &record);
     }
+    if (result == OTA_STORE_OK) {
+        bool confirmed = record.state == OTA_STATE_CONFIRMED && record_matches_current(&record);
+        bool retry = previous_auto_failed(&record);
+        taskENTER_CRITICAL();
+        service.auto_ready = confirmed || retry;
+        service.retry_previous = retry;
+        if (retry) {
+            memcpy(retry_manifest, record.manifest, sizeof retry_manifest);
+        }
+        if (!service.auto_ready) {
+            service.auto_state = OTA_AUTO_BLOCKED;
+            service.auto_finished = true;
+        }
+        taskEXIT_CRITICAL();
+    }
     bl24c512_transaction_end();
     return result != OTA_STORE_IO;
 }
@@ -303,8 +409,8 @@ static void storage_worker(void *argument) {
     (void)argument;
     for (;;) {
         if (xQueueReceive(jobs, &job, portMAX_DELAY) == pdTRUE) {
-            if (job == OTA_JOB_REQUEST) {
-                persist_request();
+            if (job.kind == OTA_JOB_REQUEST || job.kind == OTA_JOB_AUTO) {
+                persist_request(&job);
             } else if (!confirm_running_image()) {
                 taskENTER_CRITICAL();
                 service.confirmation_queued = false;
@@ -322,6 +428,7 @@ void ota_service_init(void) {
         return;
     }
     memset(&service, 0, sizeof service);
+    service.normal_reset = ota_reset_is_normal_boot();
     if (!bl24c512_transaction_init()) {
         return;
     }
@@ -357,7 +464,7 @@ void ota_service_start(void) {
 
 /** 功能：验证表单并异步排队升级请求，相同请求在本次启动内去重；参数：body，正文；session，会话；返回：HTTP 状态。 */
 int ota_service_request(const char *body, uint32_t session) {
-    ota_job_t job = OTA_JOB_REQUEST;
+    ota_job_t job = {OTA_JOB_REQUEST, {0}};
     if (!service.available || !service.started || !admin_enabled) {
         return 503;
     }
@@ -376,6 +483,7 @@ int ota_service_request(const char *body, uint32_t session) {
     taskENTER_CRITICAL();
     service.state = OTA_REQUEST_QUEUED;
     service.error = 0U;
+    service.auto_job = false;
     ++service.id;
     if (service.id == 0U) {
         service.id = 1U;
@@ -393,7 +501,7 @@ int ota_service_request(const char *body, uint32_t session) {
 
 /** 功能：在唯一网络任务安全边界执行健康排队及保存两秒后的复位；参数：now_ms，当前毫秒；返回：无。 */
 void ota_service_network_poll(uint32_t now_ms) {
-    ota_job_t job = OTA_JOB_CONFIRM;
+    ota_job_t job = {OTA_JOB_CONFIRM, {0}};
     bool reset = false;
     alarm_service_snapshot_t snapshot;
     taskENTER_CRITICAL();
@@ -415,12 +523,106 @@ void ota_service_network_poll(uint32_t now_ms) {
     }
 }
 
+/** 功能：由唯一网络所有者执行有界发现，并将完整候选交给存储工作者；参数：connected，联网状态；now_ms，当前毫秒；返回：无。 */
+void ota_service_autocheck_poll(bool connected, uint32_t now_ms) {
+#if CLOCK_OTA_AUTO_CHECK
+    ota_job_t job = {OTA_JOB_AUTO, {0}};
+    alarm_service_snapshot_t snapshot;
+    bool blocked;
+    taskENTER_CRITICAL();
+    blocked = !service.available || !service.started || service.auto_finished ||
+              service.state == OTA_REQUEST_QUEUED || service.state == OTA_REQUEST_SAVED;
+    taskEXIT_CRITICAL();
+    if (blocked) {
+        return;
+    }
+    if (!connected) {
+        service.auto_state = OTA_AUTO_WAITING;
+        return;
+    }
+    if (!local_health_ready(now_ms) || !service.auto_ready || !current_valid) {
+        service.auto_state = OTA_AUTO_HEALTH;
+        return;
+    }
+    if (!service.auto_candidate) {
+        ota_hint_t hint;
+        char url[384];
+        const char *json;
+        int length;
+        uint32_t delay = service.auto_checks == 1U ? 5000U : 15000U;
+        if (service.auto_checks != 0U && now_ms - service.auto_check_ms < delay) {
+            return;
+        }
+        if (strlen(CLOCK_OTA_PATH) > 156U) {
+            service.auto_state = OTA_AUTO_FAILED;
+            service.auto_finished = true;
+            return;
+        }
+        length = snprintf(url, sizeof url, "http://%s:%u%s?latest=1", CLOCK_OTA_HOST,
+                          (unsigned)CLOCK_OTA_PORT, CLOCK_OTA_PATH);
+        if (length < 0 || (size_t)length >= sizeof url || (size_t)length > ESP_HTTP_BOUNDED_URL_MAX_1000_MS) {
+            service.auto_state = OTA_AUTO_FAILED;
+            service.auto_finished = true;
+            return;
+        }
+        service.auto_state = OTA_AUTO_CHECKING;
+        ++service.auto_checks;
+        json = esp_at_http_get_bounded(url, 1000U);
+        service.auto_check_ms = (uint32_t)xTaskGetTickCount();
+        if (!ota_discovery_parse(json, &hint)) {
+            service.auto_state = OTA_AUTO_UNREACHABLE;
+            service.auto_finished = service.auto_checks >= 3U;
+            return;
+        }
+        if (!hint.available || hint.manifest.version <= current_manifest.version) {
+            service.auto_state = OTA_AUTO_CURRENT;
+            service.auto_finished = true;
+            return;
+        }
+        auto_candidate = hint.manifest;
+        service.auto_candidate = true;
+    }
+    if (!alarm_service_snapshot(&snapshot) || snapshot.local_editing || snapshot.saving ||
+        snapshot.ringing_mask != 0U || snapshot.snoozed_mask != 0U || snapshot.test_ringing ||
+        snapshot.test_pending || !alarm_service_maintenance_request()) {
+        service.auto_state = OTA_AUTO_BUSY;
+        return;
+    }
+    memcpy(job.manifest, auto_candidate.raw, sizeof job.manifest);
+    taskENTER_CRITICAL();
+    service.state = OTA_REQUEST_QUEUED;
+    service.error = 0U;
+    service.auto_state = OTA_AUTO_QUEUED;
+    service.auto_job = true;
+    ++service.id;
+    if (service.id == 0U) {
+        service.id = 1U;
+    }
+    if (xQueueSend(jobs, &job, 0U) != pdTRUE) {
+        service.state = OTA_REQUEST_IDLE;
+        service.auto_state = OTA_AUTO_BUSY;
+        service.auto_job = false;
+        taskEXIT_CRITICAL();
+        alarm_service_maintenance_release();
+        return;
+    }
+    taskEXIT_CRITICAL();
+#else
+    (void)connected;
+    (void)now_ms;
+#endif
+}
+
 /** 功能：输出不包含凭据的版本、身份与异步请求状态；参数：output，输出；capacity，容量；session，会话；返回：无。 */
 void ota_service_status(char *output, size_t capacity, uint32_t session) {
     static const char *const names[] = {"idle", "queued", "saved", "failed"};
+    static const char *const auto_names[] = {"waiting", "health", "checking", "current", "busy",
+                                           "queued", "unreachable", "failed", "blocked"};
     char identity[33] = {0};
     ota_request_state_t state;
     uint32_t id, error;
+    ota_auto_state_t auto_state;
+    uint8_t auto_checks;
     if (output == NULL || capacity == 0U) {
         return;
     }
@@ -433,16 +635,21 @@ void ota_service_status(char *output, size_t capacity, uint32_t session) {
     state = service.state;
     id = service.id;
     error = service.error;
+    auto_state = service.auto_state;
+    auto_checks = service.auto_checks;
     taskEXIT_CRITICAL();
     (void)snprintf(output, capacity,
                    "{\"enabled\":%s,\"session\":%lu,\"version\":%lu,\"identity\":\"%s\","
-                   "\"state\":\"%s\",\"error\":%lu,\"saving\":%s,\"id\":%lu}",
+                   "\"state\":\"%s\",\"error\":%lu,\"saving\":%s,\"id\":%lu,"
+                   "\"autoEnabled\":%s,\"autoState\":\"%s\",\"autoChecks\":%u}",
                    service.available && service.started && admin_enabled ? "true" : "false",
                    (unsigned long)session,
                    (unsigned long)(current_valid ? current_manifest.version : CLOCK_OTA_VERSION),
                    identity,
                    names[state], (unsigned long)error,
-                   state == OTA_REQUEST_QUEUED ? "true" : "false", (unsigned long)id);
+                   state == OTA_REQUEST_QUEUED ? "true" : "false", (unsigned long)id,
+                   CLOCK_OTA_AUTO_CHECK ? "true" : "false", CLOCK_OTA_AUTO_CHECK ? auto_names[auto_state] : "disabled",
+                   (unsigned)auto_checks);
 }
 
 #else
@@ -465,12 +672,19 @@ void ota_service_network_poll(uint32_t now_ms) {
     (void)now_ms;
 }
 
+/** 功能：独立构建无需自动发现；参数：connected、now_ms，未使用；返回：无。 */
+void ota_service_autocheck_poll(bool connected, uint32_t now_ms) {
+    (void)connected;
+    (void)now_ms;
+}
+
 /** 功能：报告独立应用未启用 OTA；参数：output，输出；capacity，容量；session，会话；返回：无。 */
 void ota_service_status(char *output, size_t capacity, uint32_t session) {
     if (output != NULL && capacity != 0U) {
         (void)snprintf(output, capacity,
                        "{\"enabled\":false,\"session\":%lu,\"version\":0,\"identity\":\"\","
-                       "\"state\":\"disabled\",\"error\":0,\"saving\":false,\"id\":0}",
+                       "\"state\":\"disabled\",\"error\":0,\"saving\":false,\"id\":0,"
+                       "\"autoEnabled\":false,\"autoState\":\"disabled\",\"autoChecks\":0}",
                        (unsigned long)session);
     }
 }

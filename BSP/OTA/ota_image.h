@@ -23,6 +23,8 @@ typedef struct {
 bool ota_manifest_parse(const uint8_t header[256], const uint8_t key[32], bool installed, ota_manifest_t *out);
 /** 仅供已经由 Boot 完整认证后运行的应用读取元数据；此接口不验证 HMAC，严禁用于 Boot 或安装授权。 */
 bool ota_manifest_read_trusted(const uint8_t header[256], bool installed, ota_manifest_t *out);
+/** 仅解析未认证网络提示的结构与公开身份，绝不能作为安装授权。 */
+bool ota_manifest_read_hint(const uint8_t header[256], ota_manifest_t *out);
 bool ota_image_vectors_valid(const uint8_t first[8], uint32_t image_size);
 bool ota_image_verify(const ota_manifest_t *manifest, const uint8_t *image);
 
